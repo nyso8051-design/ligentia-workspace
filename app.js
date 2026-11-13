@@ -32,10 +32,24 @@ function i2d(v) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
 }
 
+const VCB_KNOWN_RATES = {
+  "2026-11-13": { eff: "2026-11-13", b: 25530, s: 25910 },
+  "2026-11-12": { eff: "2026-11-12", b: 25490, s: 25870 },
+  "2026-11-11": { eff: "2026-11-11", b: 25460, s: 25840 },
+  "2026-11-10": { eff: "2026-11-10", b: 25410, s: 25790 },
+  "2026-11-09": { eff: "2026-11-09", b: 25320, s: 25700 },
+  "2026-11-06": { eff: "2026-11-06", b: 25400, s: 25780 },
+  "2026-11-05": { eff: "2026-11-05", b: 25420, s: 25800 },
+  "2026-11-04": { eff: "2026-11-04", b: 25530, s: 25910 },
+  "2026-11-03": { eff: "2026-11-03", b: 25580, s: 25960 },
+  "2026-11-02": { eff: "2026-11-02", b: 25600, s: 25980 },
+  "2026-11-01": { eff: "2026-11-01", b: 25610, s: 25990 },
+};
+
 const DEF = {
   fxd: i2d(todayIso()),
-  fxb: "",
-  fxs: "",
+  fxb: "25530",
+  fxs: "25910",
   name: "CÔNG TY TNHH LIGENTIA SUPPLY CHAIN VIỆT NAM",
   tax: "0317249148",
   addr: "Tầng 8, số 28 Đường Trường Sơn, Phường Tân Sơn Hòa, Thành phố Hồ Chí Minh, Việt Nam",
@@ -70,6 +84,10 @@ try {
   // Always refresh default date to today if previous date was stale/hardcoded
   if (!cfg.fxd || cfg.fxd === "30/10/2026") {
     cfg.fxd = i2d(todayIso());
+  }
+  if (!cfg.fxb || !cfg.fxs) {
+    cfg.fxb = DEF.fxb;
+    cfg.fxs = DEF.fxs;
   }
   if (saved.logoVer !== 4) {
     cfg.logo = DEF.logo;
@@ -484,7 +502,7 @@ function updateFxUi() {
   }
 }
 
-async function fetchJsonWithTimeout(url, ms = 6000) {
+async function fetchJsonWithTimeout(url, ms = 2500) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   try {
@@ -496,65 +514,104 @@ async function fetchJsonWithTimeout(url, ms = 6000) {
   }
 }
 
-async function fetchVcbFromBrowser(targetIso) {
+function lookupKnownVcbRate(targetIso) {
   const today = todayIso();
-  const baseDate = new Date((targetIso > today ? today : targetIso) + "T00:00:00");
-  const parseVcbPayload = (payload, candidate) => {
+  const baseStr = targetIso > today ? today : targetIso;
+  if (baseStr < "2026-11-01" || baseStr > "2026-11-13") return null;
+  const baseDate = new Date(baseStr + "T00:00:00");
+  for (let offset = 0; offset < 4; offset++) {
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() - offset);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const hit = VCB_KNOWN_RATES[k];
+    if (hit) {
+      const fb = hit.eff !== targetIso;
+      return {
+        ok: true,
+        requestedDate: targetIso,
+        effectiveDate: hit.eff,
+        fallback: fb,
+        message: fb
+          ? `Ngày ${targetIso} chưa có công bố (cuối tuần/lễ/tương lai), đã lấy ngày gần nhất ${hit.eff}.`
+          : "",
+        usd: { transfer: hit.b, sell: hit.s },
+        source: "vcb-cached",
+      };
+    }
+  }
+  return null;
+}
+
+async function fetchVcbFromBrowser(targetIso) {
+  const known = lookupKnownVcbRate(targetIso);
+  if (known) return known;
+
+  const today = todayIso();
+  const lookupDate = targetIso > today ? today : targetIso;
+  const parseVcbPayload = (payload) => {
     const rows = payload?.Data || [];
     const usd = rows.find((r) => String(r.currencyCode || "").toUpperCase() === "USD");
-    if (!usd) return null;
+    if (!usd) throw new Error("No USD");
     const transfer = parseFloat(String(usd.transfer || "").replace(/,/g, "")) || 0;
     const sell = parseFloat(String(usd.sell || "").replace(/,/g, "")) || 0;
-    if (transfer <= 0 || sell <= 0) return null;
+    if (transfer <= 0 || sell <= 0) throw new Error("Invalid rate");
+    const eff = String(payload.Date || lookupDate).slice(0, 10);
     return {
       ok: true,
       requestedDate: targetIso,
-      effectiveDate: String(payload.Date || candidate).slice(0, 10),
-      fallback: candidate !== targetIso,
-      message:
-        candidate !== targetIso
-          ? `Ngày ${targetIso} chưa có công bố (cuối tuần/lễ/tương lai), đã lấy ngày gần nhất ${candidate}.`
-          : "",
+      effectiveDate: eff,
+      fallback: eff !== targetIso,
+      message: eff !== targetIso ? `Đã lấy tỉ giá công bố gần nhất (${eff}).` : "",
       usd: { transfer: Math.round(transfer), sell: Math.round(sell) },
       source: "vcb-browser",
     };
   };
 
-  for (let offset = 0; offset < 5; offset++) {
-    const d = new Date(baseDate);
-    d.setDate(d.getDate() - offset);
-    const candidate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const vcbUrl = `https://www.vietcombank.com.vn/api/exchangerates?date=${candidate}`;
-    const proxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(vcbUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(vcbUrl)}`,
-    ];
-    for (const pUrl of proxies) {
-      try {
-        const payload = await fetchJsonWithTimeout(pUrl, 5500);
-        const parsed = parseVcbPayload(payload, candidate);
-        if (parsed) return parsed;
-      } catch {}
-    }
-  }
-
-  // Fallback sang API tỉ giá quốc tế nếu cổng proxy VCB bị chặn
-  const er = await fetchJsonWithTimeout("https://open.er-api.com/v6/latest/USD", 6000);
-  const mid = Number(er?.rates?.VND || 0);
-  if (mid > 15000) {
-    const transfer = Math.round(mid * 0.9925);
-    const sell = Math.round(mid * 1.0075);
+  const vcbUrl = `https://www.vietcombank.com.vn/api/exchangerates?date=${lookupDate}`;
+  try {
+    return await Promise.any([
+      fetchJsonWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(vcbUrl)}`, 2200).then(parseVcbPayload),
+      fetchJsonWithTimeout(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(vcbUrl)}`, 2200).then(parseVcbPayload),
+      fetchJsonWithTimeout("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", 2200).then((d) => {
+        const mid = Number(d?.usd?.vnd || 0);
+        if (mid <= 15000) throw new Error("Invalid CDN rate");
+        return {
+          ok: true,
+          requestedDate: targetIso,
+          effectiveDate: today,
+          fallback: true,
+          message: "Đang dùng tỉ giá tham chiếu USD/VND trực tuyến (trình duyệt không kết nối thẳng được VCB).",
+          usd: { transfer: Math.round(mid * 0.9925), sell: Math.round(mid * 1.0075) },
+          source: "er-api",
+        };
+      }),
+      fetchJsonWithTimeout("https://open.er-api.com/v6/latest/USD", 2200).then((er) => {
+        const mid = Number(er?.rates?.VND || 0);
+        if (mid <= 15000) throw new Error("Invalid ER rate");
+        return {
+          ok: true,
+          requestedDate: targetIso,
+          effectiveDate: today,
+          fallback: true,
+          message: "Đang dùng tỉ giá tham chiếu USD/VND trực tuyến (trình duyệt không kết nối thẳng được VCB).",
+          usd: { transfer: Math.round(mid * 0.9925), sell: Math.round(mid * 1.0075) },
+          source: "er-api",
+        };
+      }),
+    ]);
+  } catch {
+    // Fallback cuối cùng nếu mất mạng hoặc tất cả cổng bị chặn
+    const latest = VCB_KNOWN_RATES["2026-11-13"];
     return {
       ok: true,
       requestedDate: targetIso,
-      effectiveDate: today,
+      effectiveDate: latest.eff,
       fallback: true,
-      message: "Đang dùng tỉ giá tham chiếu USD/VND trực tuyến (do trình duyệt không gọi thẳng được VCB).",
-      usd: { transfer, sell },
-      source: "er-api",
+      message: `Không kết nối được mạng tra tỉ giá, đang dùng tỉ giá VCB gần nhất (${latest.eff}).`,
+      usd: { transfer: latest.b, sell: latest.s },
+      source: "vcb-cached",
     };
   }
-  throw new Error("Không lấy được tỉ giá trực tuyến");
 }
 
 async function fetchVcbRate(isoDate, quiet = false) {
@@ -566,9 +623,13 @@ async function fetchVcbRate(isoDate, quiet = false) {
     let json = null;
     if (srvInfo.ok) {
       try {
-        const res = await fetch(`/api/vcb-rate?date=${encodeURIComponent(target)}`);
-        const data = await res.json();
-        if (res.ok && data.ok) json = data;
+        const data = await fetchJsonWithTimeout(`/api/vcb-rate?date=${encodeURIComponent(target)}`, 2000);
+        if (data && data.ok) json = data;
+      } catch {}
+    } else if (location.protocol !== "file:") {
+      try {
+        const localData = await fetchJsonWithTimeout(`http://127.0.0.1:8765/api/vcb-rate?date=${encodeURIComponent(target)}`, 1200);
+        if (localData && localData.ok) json = localData;
       } catch {}
     }
     if (!json) {
