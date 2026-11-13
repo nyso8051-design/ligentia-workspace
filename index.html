@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ligentia WorkSpace · Bảng kê phí</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <div class="brand-logo"><img id="bl" alt="Ligentia"></div>
+          <div class="brand-text">
+            <strong>Ligentia Workspace</strong>
+            <span>Bảng kê phí vận hành</span>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Điều hướng chính">
+          <button type="button" data-v="main" class="tab on">Bảng kê</button>
+          <button type="button" data-v="set" class="tab">Thông tin công ty</button>
+        </nav>
+
+        <div class="topbar-actions">
+          <span id="srvStatus" class="srv-pill" title="Trạng thái máy chủ VCB & Gemini AI">Đang kiểm tra máy chủ...</span>
+          <button type="button" class="btn btn-primary" id="pick">Chọn file Excel</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section id="vMain">
+        <input id="f" type="file" accept=".xlsx,.xls,.xlsm,.csv" hidden>
+
+        <!-- Empty state -->
+        <div id="emptyState" class="empty-wrap">
+          <div class="drop-card" id="drop">
+            <div class="drop-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <h1>Tải file bảng kê lên để bắt đầu</h1>
+            <p>Kéo thả file <code>.xlsx</code>, <code>.xls</code> hoặc <code>.csv</code> vào đây. Hệ thống tự nhận diện loại phí, lọc dòng Posted, tra tỉ giá Vietcombank và xuất bảng kê chuẩn.</p>
+            <div class="drop-actions">
+              <button type="button" class="btn btn-primary" id="dropBtn">Chọn file từ máy</button>
+              <button type="button" class="btn btn-ghost" id="loadSample">Dùng dữ liệu mẫu</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="err" class="banner banner-err" hidden></div>
+
+        <!-- Working workspace -->
+        <section id="work" hidden>
+          <!-- File summary bar + KPIs -->
+          <div class="file-bar">
+            <div class="file-meta">
+              <span class="file-badge" id="fileName">data.xlsx</span>
+              <span class="file-sub" id="fileSub"></span>
+            </div>
+            <div class="file-actions">
+              <button type="button" class="btn btn-sm btn-ghost" id="aiClassifyBtn" title="Dùng Gemini AI chuẩn hoá các loại phí chưa quen">✨ AI Chuẩn hoá phí</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="aiAuditBtn" title="Dùng Gemini AI kiểm tra nhanh rủi ro dữ liệu">✨ AI Kiểm tra</button>
+              <button type="button" class="btn btn-sm" id="changeFile">Đổi file</button>
+            </div>
+          </div>
+
+          <div class="kpis" id="kpis"></div>
+
+          <div id="aiAuditBox" class="banner banner-ai" hidden></div>
+          <div id="alerts"></div>
+
+          <div class="workspace-grid">
+            <!-- Factory sidebar -->
+            <aside class="sidebar">
+              <div class="sidebar-head">
+                <span class="sidebar-title">Nhà máy (<span id="facCount">0</span>)</span>
+              </div>
+              <div class="sidebar-search">
+                <input id="facSearch" type="search" placeholder="Tìm nhà máy..." aria-label="Tìm nhà máy">
+              </div>
+              <div class="fac-list" id="list"></div>
+            </aside>
+
+            <!-- Main statement panel -->
+            <div class="main-panel">
+              <!-- Unified Controls Card -->
+              <div class="controls-card">
+                <!-- Row 1: VCB Exchange Rate -->
+                <div class="ctrl-section fx-section">
+                  <div class="ctrl-label">
+                    <strong>Tỉ giá VCB (USD → VND)</strong>
+                    <span id="fxBadge" class="fx-badge">Chưa tải</span>
+                  </div>
+                  <div class="fx-grid">
+                    <label class="field">
+                      <span>Ngày tỉ giá</span>
+                      <input id="fxd" type="date">
+                    </label>
+                    <label class="field">
+                      <span>Mua CK</span>
+                      <input id="fxb" type="text" inputmode="numeric" placeholder="25,480">
+                    </label>
+                    <label class="field">
+                      <span>Bán</span>
+                      <input id="fxs" type="text" inputmode="numeric" placeholder="25,860">
+                    </label>
+                    <div class="fx-avg-box">
+                      <span>Áp dụng (TB)</span>
+                      <strong id="fxavg">—</strong>
+                    </div>
+                    <button type="button" class="btn btn-sm" id="fxFetchBtn" title="Tra lại tỉ giá từ Vietcombank">Tra VCB</button>
+                  </div>
+                  <div id="fxNote" class="fx-note" hidden></div>
+                </div>
+
+                <!-- Row 2: Period & Date Filter -->
+                <div class="ctrl-section filter-section">
+                  <div class="filter-row">
+                    <label class="field-inline">
+                      <span>Kỳ</span>
+                      <input id="period" type="text" placeholder="VD: 01/11/2026 – 13/11/2026">
+                    </label>
+                    <label class="field-inline">
+                      <span>Từ</span>
+                      <input id="dfrom" type="date">
+                    </label>
+                    <label class="field-inline">
+                      <span>Đến</span>
+                      <input id="dto" type="date">
+                    </label>
+                    <button type="button" class="btn btn-sm btn-ghost" id="dclr">Xoá lọc</button>
+                    <label class="check-inline">
+                      <input id="incu" type="checkbox" checked>
+                      <span>Gồm kỳ trước</span>
+                    </label>
+                    <label class="check-inline" title="Bật nếu muốn xem cả dòng chưa Posted">
+                      <input id="inclAll" type="checkbox">
+                      <span>Tính cả chưa Posted</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Row 3: Normalized Fee Types -->
+                <div class="ctrl-section chips-section">
+                  <div class="chips-head">
+                    <span class="ctrl-label-sm">Loại phí xuất</span>
+                    <button type="button" class="link-btn" id="toggleAllTypes">Chọn / Bỏ tất cả</button>
+                  </div>
+                  <div id="chips" class="chips-wrap"></div>
+                </div>
+
+                <!-- Row 4: Export Actions -->
+                <div class="ctrl-actions">
+                  <div class="btn-group">
+                    <button type="button" class="btn btn-primary" id="pr1">In / Lưu PDF</button>
+                    <button type="button" class="btn" id="x1">Tải Excel (.xlsx)</button>
+                  </div>
+                  <div class="btn-group">
+                    <button type="button" class="btn btn-ghost" id="prA">In tất cả</button>
+                    <button type="button" class="btn btn-ghost" id="xA">Excel tất cả</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="fi"></div>
+              <div class="paper" id="prev"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Company Settings -->
+      <section id="vSet" hidden>
+        <div class="settings-card">
+          <div class="settings-head">
+            <div>
+              <h2>Thông tin công ty phát hành</h2>
+              <p>Cố định trên tiêu đề mọi bảng kê PDF & Excel. Tự động lưu trên trình duyệt.</p>
+            </div>
+            <button type="button" class="btn btn-sm btn-ghost" id="rs">Khôi phục mặc định</button>
+          </div>
+          <div class="logo-row">
+            <div class="logo-box"><img id="sl" alt="Logo công ty"></div>
+            <button type="button" class="btn btn-sm" id="lgb">Đổi logo</button>
+            <input id="lgf" type="file" accept="image/*" hidden>
+          </div>
+          <div id="sf" class="settings-grid"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="printArea"></div>
+  <script src="app.js"></script>
+</body>
+</html>
