@@ -12,16 +12,14 @@ const norm = (s) =>
     .replace(/\s+/g, " ")
     .trim();
 
-const round2 = (n) => {
+const round3 = (n) => {
   const x = Number(n) || 0;
-  return (x < 0 ? -1 : 1) * (Math.round(Math.abs(x) * 100 + 1e-9) / 100);
+  return (x < 0 ? -1 : 1) * (Math.round(Math.abs(x) * 1000 + 1e-9) / 1000);
 };
-const fmt = (n) => {
-  const v = round2(n);
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
+const fmt = (n) => round3(n).toLocaleString("en-US", { maximumFractionDigits: 3 });
+const xlsxFmt = (n) => {
+  const dec = (round3(n).toFixed(3).replace(/0+$/, "").split(".")[1] || "").length;
+  return dec ? `#,##0.${"0".repeat(dec)}` : "#,##0";
 };
 const fmtU = (n) => Math.round(Number(n) || 0).toLocaleString("en-US");
 const D = (x) => (x ? `${String(x.d).padStart(2, "0")}/${String(x.m).padStart(2, "0")}/${x.y}` : "");
@@ -148,7 +146,7 @@ function toast(msg, ms = 3500) {
 
 /* ---------- Đọc số thành chữ tiếng Việt ---------- */
 function words(n) {
-  n = round2(Math.abs(Number(n) || 0));
+  n = round3(Math.abs(Number(n) || 0));
   if (!n) return "Không đồng";
   const d = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
   const th = (x, full) => {
@@ -169,18 +167,13 @@ function words(n) {
     }
     return s;
   };
-  let intPart = Math.floor(n);
-  let decPart = Math.round((n - intPart) * 100);
-  if (decPart >= 100) {
-    intPart += 1;
-    decPart = 0;
-  }
+  const [intStr, decStr = ""] = n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "").split(".");
+  let tmp = Number(intStr);
   let o = "";
-  if (!intPart) {
+  if (!tmp) {
     o = "không";
   } else {
     const g = [];
-    let tmp = intPart;
     while (tmp > 0) {
       g.push(tmp % 1000);
       tmp = Math.floor(tmp / 1000);
@@ -190,11 +183,13 @@ function words(n) {
       o += th(g[i], o !== "") + (["", "nghìn", "triệu", "tỷ"][i % 4] || "") + " ";
     }
   }
-  o = o.replace(/\s+/g, " ").trim();
-  if (decPart > 0) {
-    const decWords = decPart < 10 ? `không ${d[decPart]}` : th(decPart, false).replace(/\s+/g, " ").trim();
-    o += ` phẩy ${decWords}`;
+  if (decStr) {
+    const leadZeros = decStr.match(/^0*/)[0].length;
+    const decVal = Number(decStr);
+    const rest = decVal < 10 ? d[decVal] : th(decVal, false);
+    o += ` phẩy ${"không ".repeat(leadZeros)}${rest}`;
   }
+  o = o.replace(/\s+/g, " ").trim();
   return o.charAt(0).toUpperCase() + o.slice(1) + " đồng";
 }
 
@@ -736,12 +731,12 @@ function stats(f) {
     by[r.feeKey].s += r.amt;
   });
 
-  const subtotal = round2(inc.reduce((s, r) => s + r.amt, 0));
+  const subtotal = round3(inc.reduce((s, r) => s + r.amt, 0));
   const vatOn = !!cfg.vatOn;
   const taxRate = vatOn ? Math.max(0, Number(cfg.vatRate) || 0) : 0;
-  const taxable = vatOn ? round2(inc.filter((r) => taxTypes.has(r.feeKey)).reduce((s, r) => s + r.amt, 0)) : 0;
-  const tax = vatOn && taxRate > 0 ? round2((taxable * taxRate) / 100) : 0;
-  const total = round2(subtotal + tax);
+  const taxable = vatOn ? round3(inc.filter((r) => taxTypes.has(r.feeKey)).reduce((s, r) => s + r.amt, 0)) : 0;
+  const tax = vatOn && taxRate > 0 ? round3((taxable * taxRate) / 100) : 0;
+  const total = round3(subtotal + tax);
 
   return {
     inc,
@@ -749,7 +744,7 @@ function stats(f) {
     subtotal,
     vatOn,
     taxRate,
-    taxLabel: String(round2(taxRate)),
+    taxLabel: String(round3(taxRate)),
     taxable,
     tax,
     total,
@@ -1035,13 +1030,13 @@ async function buildXlsxBuffer(fs) {
           c.font = ft(11);
           c.border = bd;
           c.alignment = { horizontal: d.r ? "right" : "center", vertical: "middle", wrapText: true, indent: d.r ? 1 : 0 };
-          if (d.n) c.numFmt = Number.isInteger(round2(c.value)) ? "#,##0" : "#,##0.00";
+          if (d.n) c.numFmt = xlsxFmt(c.value);
         });
       });
     });
 
     const tr = (l, v, b) => {
-      const val = round2(v);
+      const val = round3(v);
       const r = ws.addRow([]);
       r.height = b ? 24 : 20;
       if (amtCol > A) {
@@ -1052,7 +1047,7 @@ async function buildXlsxBuffer(fs) {
       }
       const c = r.getCell(amtCol);
       c.value = val;
-      c.numFmt = Number.isInteger(val) ? "#,##0" : "#,##0.00";
+      c.numFmt = xlsxFmt(val);
       c.font = ft(b ? 13 : 11, 1);
       c.alignment = { horizontal: "right", vertical: "middle", indent: 1 };
       if (Z > amtCol) {
@@ -1391,7 +1386,7 @@ function buildLocalAuditBullets() {
   const totalVnd = data.fs.reduce((s, f) => s + stats(f).total, 0);
   const bullets = [
     `Tổng hợp ${data.fs.length} nhà máy (${data.rows.length} dòng), tổng tiền cần trả hiện tại${
-      cfg.vatOn ? ` (đã gồm VAT ${round2(cfg.vatRate ?? 8)}%)` : ""
+      cfg.vatOn ? ` (đã gồm VAT ${round3(cfg.vatRate ?? 8)}%)` : ""
     }: ${fmt(totalVnd)} đ.`,
   ];
   if (notPosted) bullets.push(`Có ${notPosted} dòng chưa ở trạng thái Posted (đang tạm loại khỏi bảng kê xuất).`);
