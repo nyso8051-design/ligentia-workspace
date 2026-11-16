@@ -83,7 +83,6 @@ let cur = null;
 let inclAll = false;
 let period = "";
 let types = new Set();
-let taxTypes = new Set();
 let hl = null;
 let go = false;
 let df = 0;
@@ -423,7 +422,7 @@ function parseWorkbook(wb) {
   return null;
 }
 
-const isCshtRow = (r) => /csht|co so ha tang/.test(r.feeKey);
+const isCshtRow = (r) => /csht|co so ha tang/.test(r?.feeKey || "");
 
 function validateRows(rows) {
   const seen = new Map();
@@ -724,25 +723,20 @@ function stats(f) {
     .filter((r) => (inclAll || r.ok) && sel(r) && inR(r))
     .sort((a, b) => dv(a) - dv(b) || a.n - b.n);
 
-  // Gom tổng phụ theo LOẠI PHÍ chuẩn (feeKey), không liệt kê từng số BK
-  const by = {};
-  inc.forEach((r) => {
-    if (!by[r.feeKey]) by[r.feeKey] = { t: r.feeType, s: 0 };
-    by[r.feeKey].s += r.amt;
-  });
-
   const subtotal = round3(inc.reduce((s, r) => s + r.amt, 0));
   const vatOn = !!cfg.vatOn;
   const taxRate = vatOn ? Math.max(0, Number(cfg.vatRate) || 0) : 0;
-  const taxable = vatOn ? round3(inc.filter((r) => taxTypes.has(r.feeKey)).reduce((s, r) => s + r.amt, 0)) : 0;
-  const tax = vatOn && taxRate > 0 ? round3((taxable * taxRate) / 100) : 0;
+  const taxable =
+    vatOn && taxRate > 0 ? round3(inc.filter((r) => !isCshtRow(r)).reduce((s, r) => s + r.amt, 0)) : 0;
+  const tax = taxable > 0 ? round3((taxable * taxRate) / 100) : 0;
+  const showVat = tax > 0;
   const total = round3(subtotal + tax);
 
   return {
     inc,
-    by: Object.values(by),
     subtotal,
     vatOn,
+    showVat,
     taxRate,
     taxLabel: String(round3(taxRate)),
     taxable,
@@ -840,12 +834,11 @@ function sheet(f, scr) {
       <tbody>${body}</tbody>
     </table>
     <table class="tt">
-      ${s.by.length > 1 ? s.by.map((b) => `<tr><td>${esc(b.t)}</td><td>${fmt(b.s)}</td></tr>`).join("") : ""}
       ${
-        s.vatOn
+        s.showVat
           ? `<tr><td>Tổng cộng <i>(Subtotal)</i>:</td><td>${fmt(s.subtotal)}</td></tr>
              <tr><td>Thuế GTGT ${esc(s.taxLabel)}% <i>(VAT ${esc(s.taxLabel)}%)</i>${
-              s.taxable > 0 && s.taxable < s.subtotal ? ` <small class="tax-base">(trên ${fmt(s.taxable)})</small>` : ""
+              s.taxable < s.subtotal ? ` <small class="tax-base">(trên ${fmt(s.taxable)})</small>` : ""
             }:</td><td>${fmt(s.tax)}</td></tr>
              <tr class="gt"><td>Tổng tiền cần trả <i>(Total payment)</i>:</td><td>${fmt(s.total)}</td></tr>`
           : `<tr class="gt"><td>Tổng cộng <i>(Total amount)</i>:</td><td>${fmt(s.total)}</td></tr>`
@@ -1056,14 +1049,13 @@ async function buildXlsxBuffer(fs) {
       for (let x = A; x <= Z; x++) r.getCell(x).border = bd;
     };
 
-    if (s.by.length > 1) s.by.forEach((b) => tr(rt([b.t]), b.s));
-    if (s.vatOn) {
+    if (s.showVat) {
       tr(rt(["Tổng cộng "], ["(Subtotal)", 11, 0, 1], [":"]), s.subtotal);
       const taxParts = [
         [`Thuế GTGT ${s.taxLabel}% `],
         [`(VAT ${s.taxLabel}%)`, 11, 0, 1],
       ];
-      if (s.taxable > 0 && s.taxable < s.subtotal) {
+      if (s.taxable < s.subtotal) {
         taxParts.push([` (trên ${fmt(s.taxable)})`, 10, 0, 1, "FF555555"]);
       }
       taxParts.push([":"]);
@@ -1263,18 +1255,6 @@ function render() {
     $("#vatRate").value = cfg.vatRate ?? 8;
   }
   $("#vatRate").disabled = !cfg.vatOn;
-  $("#toggleAllTaxTypes").disabled = !cfg.vatOn;
-  $("#taxChips").innerHTML = [...data.types.entries()]
-    .map(([k, meta]) => {
-      const active = types.has(k);
-      const taxed = taxTypes.has(k);
-      return `<button type="button" class="chip chip-tax" data-tax="${esc(k)}" aria-pressed="${
-        cfg.vatOn && active && taxed
-      }" ${!cfg.vatOn || !active ? "disabled" : ""} title="${
-        active ? "Bấm để bật/tắt tính thuế cho loại phí này" : "Loại phí này đang không được chọn xuất"
-      }">${esc(meta.label)} <span class="chip-count">${meta.count}</span></button>`;
-    })
-    .join("");
 
   const filteredFacs = data.fs.filter((f) => !facQuery || norm(f.name).includes(norm(facQuery)));
   $("#facCount").textContent = filteredFacs.length;
@@ -1337,7 +1317,6 @@ function loadArrayBuffer(buf, fileName) {
     const tm = rebuildTypeMap(p.rows);
     data = { fileName, sheet: p.sheet, rows: p.rows, fs, types: tm };
     types = new Set(tm.keys());
-    taxTypes = new Set(tm.keys());
     hl = null;
     const ds = p.rows.filter((r) => r.date).sort((a, b) => dv(a) - dv(b));
     dmin = ds.length ? dv(ds[0]) : 0;
@@ -1373,7 +1352,6 @@ function runLocalClassify() {
   validateRows(data.rows);
   data.types = rebuildTypeMap(data.rows);
   types = new Set(data.types.keys());
-  taxTypes = new Set(data.types.keys());
   render();
   toast(`Đã chuẩn hoá ${updated} dòng phí theo bộ quy tắc (${data.types.size} loại phí).`);
 }
@@ -1383,10 +1361,12 @@ function buildLocalAuditBullets() {
   const missingCshtHd = data.rows.filter((r) => isCshtRow(r) && !r.hd).length;
   const usdRows = data.rows.filter((r) => r.usd).length;
   const dupRows = data.rows.filter((r) => r.is.some((i) => i.t.includes("trùng"))).length;
-  const totalVnd = data.fs.reduce((s, f) => s + stats(f).total, 0);
+  const allSt = data.fs.map(stats);
+  const totalVnd = allSt.reduce((s, x) => s + x.total, 0);
+  const hasVat = allSt.some((x) => x.showVat);
   const bullets = [
     `Tổng hợp ${data.fs.length} nhà máy (${data.rows.length} dòng), tổng tiền cần trả hiện tại${
-      cfg.vatOn ? ` (đã gồm VAT ${round3(cfg.vatRate ?? 8)}%)` : ""
+      hasVat ? ` (đã gồm VAT ${round3(cfg.vatRate ?? 8)}%)` : ""
     }: ${fmt(totalVnd)} đ.`,
   ];
   if (notPosted) bullets.push(`Có ${notPosted} dòng chưa ở trạng thái Posted (đang tạm loại khỏi bảng kê xuất).`);
@@ -1452,7 +1432,6 @@ async function runAiClassify() {
     validateRows(data.rows);
     data.types = rebuildTypeMap(data.rows);
     types = new Set(data.types.keys());
-    taxTypes = new Set(data.types.keys());
     render();
     toast(`Gemini AI đã chuẩn hoá ${updated} dòng phí (${data.types.size} loại phí).`);
   } catch (err) {
@@ -1572,13 +1551,6 @@ document.addEventListener("click", (e) => {
     return render();
   }
 
-  const tx = e.target.closest("[data-tax]");
-  if (tx) {
-    const k = tx.dataset.tax;
-    taxTypes.has(k) ? taxTypes.delete(k) : taxTypes.add(k);
-    return render();
-  }
-
   const t = e.target.closest("[data-k]");
   if (!t || !t.dataset.k) return;
   cur = t.dataset.k;
@@ -1618,15 +1590,6 @@ $("#toggleAllTypes").onclick = () => {
   if (!data) return;
   if (types.size === data.types.size) types.clear();
   else types = new Set(data.types.keys());
-  render();
-};
-
-$("#toggleAllTaxTypes").onclick = () => {
-  if (!data || !cfg.vatOn) return;
-  const activeKeys = [...data.types.keys()].filter((k) => types.has(k));
-  const allTaxed = activeKeys.length > 0 && activeKeys.every((k) => taxTypes.has(k));
-  if (allTaxed) activeKeys.forEach((k) => taxTypes.delete(k));
-  else activeKeys.forEach((k) => taxTypes.add(k));
   render();
 };
 

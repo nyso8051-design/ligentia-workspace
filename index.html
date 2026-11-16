@@ -161,22 +161,18 @@
 
                 <!-- Row 4: VAT / Tax Options -->
                 <div class="ctrl-section tax-section">
-                  <div class="tax-head">
-                    <div class="tax-left">
-                      <label class="check-inline">
-                        <input id="vatOn" type="checkbox" checked>
-                        <strong>Tính thuế GTGT (VAT)</strong>
-                      </label>
-                      <label class="field-inline tax-rate-field">
-                        <span>Thuế suất</span>
-                        <input id="vatRate" type="number" min="0" max="100" step="0.5" value="8">
-                        <span>%</span>
-                      </label>
-                    </div>
-                    <button type="button" class="link-btn" id="toggleAllTaxTypes">Chọn / Bỏ tất cả thuế</button>
+                  <div class="tax-left">
+                    <label class="check-inline">
+                      <input id="vatOn" type="checkbox" checked>
+                      <strong>Tính thuế GTGT (VAT)</strong>
+                    </label>
+                    <label class="field-inline tax-rate-field">
+                      <span>Thuế suất</span>
+                      <input id="vatRate" type="number" min="0" max="100" step="0.5" value="8">
+                      <span>%</span>
+                    </label>
+                    <span class="tax-hint">(Áp dụng cho mọi loại phí, trừ Phí CSHT miễn VAT)</span>
                   </div>
-                  <div class="tax-sub">Chọn loại phí chịu thuế (có thể tắt VAT cho khoản chi hộ như Phí CSHT):</div>
-                  <div id="taxChips" class="chips-wrap"></div>
                 </div>
 
                 <!-- Row 5: Export Actions -->
