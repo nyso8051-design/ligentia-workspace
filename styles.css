@@ -821,6 +821,55 @@ textarea:focus {
   color: #ffffff;
 }
 
+.tax-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 6px;
+}
+
+.tax-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.tax-left .check-inline strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.tax-rate-field input[type="number"] {
+  width: 68px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tax-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.chip-tax[aria-pressed="true"] {
+  background: var(--teal, #0f766e);
+  border-color: var(--teal, #0f766e);
+  color: #ffffff;
+}
+
+.chip-tax:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chip-tax:disabled:hover {
+  border-color: var(--line-strong);
+  color: var(--ink-soft);
+}
+
 .ctrl-actions {
   display: flex;
   align-items: center;
@@ -1022,6 +1071,12 @@ table.tt {
 
 .tt tr.gt td {
   font-size: 14.5px;
+}
+
+.tt .tax-base {
+  font-size: 11px;
+  color: #555;
+  font-weight: 400;
 }
 
 .wd {
