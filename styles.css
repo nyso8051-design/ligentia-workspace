@@ -1571,6 +1571,15 @@ table.tt {
   cursor: pointer;
 }
 
+.sj-tenda-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--navy);
+}
+
 .sj-note-row {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -1622,7 +1631,8 @@ table.tt {
 }
 
 .sj-sheet {
-  min-width: 1120px;
+  min-width: 1020px;
+  padding: 16px 18px;
 }
 
 .sj-sheet-title {
@@ -1634,14 +1644,14 @@ table.tt {
 }
 
 .sj-table th {
-  font-size: 11px;
-  padding: 6px 5px;
+  font-size: 10.5px;
+  padding: 5px 4px;
   white-space: nowrap;
 }
 
 .sj-table td {
-  font-size: 11.5px;
-  padding: 6px 5px;
+  font-size: 11px;
+  padding: 5px 4px;
   vertical-align: middle;
 }
 
