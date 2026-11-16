@@ -1,6 +1,7 @@
-/* Ligentia WorkSpace — Tab 2: Bảng kê Sunjune (Phát sinh vận tải & Tariff Combine) */
+/* Ligentia WorkSpace — Tab 2: Bảng kê Sunjune (Form chuẩn 18 cột, gộp thông minh & tính Tariff tự động) */
 (function () {
-  const STORAGE_KEY = "lg_sunjune_v1";
+  const STORAGE_KEY = "lg_sunjune_v2";
+  const LEGACY_KEY = "lg_sunjune_v1";
 
   const TRUCK_COLS = [
     "1.25T",
@@ -16,7 +17,7 @@
     "45HC/40HCNOR",
   ];
 
-  // Vietnam Domestic Trucking Tariff (Valid 01 Apr – 31 Dec 2026, VND prioritized)
+  // Bảng giá Vietnam Domestic Tariff (Valid 01 Apr – 31 Dec 2026, ưu tiên VND)
   const VN_TARIFF = [
     { key: "everviet", desc: "WS - Everviet", local: "Everviet", vnd: [913500, 1044000, 1174500, 1305000, 1566000, 1774800, 2218500, 2544750, 2218500, 2610000, 2871000] },
     { key: "everviet_new", desc: "WS - Everviet - new adress", local: "Everviet New", vnd: [2218500, 2349000, 2479500, 2610000, 2871000, 3079800, 3523500, 3849750, 3523500, 3915000, 4176000] },
@@ -76,52 +77,55 @@
     { code: "FCL-45HC", label: "FCL · 45HC", truckCell: "FCL", defaultVol: "45HC", colIdx: 10, isFcl: true, waitRate: 200000 },
   ];
 
-  const getTariff = (key) => VN_TARIFF.find((t) => t.key === key) || VN_TARIFF.find((t) => t.key === "sunjune");
-  const getVehicle = (code) => VEHICLE_OPTIONS.find((v) => v.code === code) || VEHICLE_OPTIONS[4]; // default 8T
-
   const TENDA_FEE = 1000000;
   const SHELL_FEE_PER_DAY = 1800000;
+  const FUEL_FACTOR = 1.25;
+
+  const getTariff = (key) => VN_TARIFF.find((t) => t.key === key) || VN_TARIFF.find((t) => t.key === "sunjune");
+  const getVehicle = (code) => VEHICLE_OPTIONS.find((v) => v.code === code) || VEHICLE_OPTIONS[4];
 
   let sjState = {
     title: "BẢNG TỔNG HỢP PHÁT SINH",
-    period: "",
     defaultFactory: "sunjune",
-    fuelFactor: 1.25,
     vatOn: true,
     vatRate: 8,
     trips: [],
   };
 
   let editingTripId = null;
-  let draftTrip = null;
-  let manualLocked = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
+  let draft = null;
+  let manualLocks = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
   let searchQuery = "";
   let showTariffDrawer = false;
 
-  function loadState() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-      if (raw && typeof raw === "object") {
-        sjState = {
-          title: typeof raw.title === "string" && raw.title ? raw.title : "BẢNG TỔNG HỢP PHÁT SINH",
-          period: typeof raw.period === "string" ? raw.period : "",
-          defaultFactory: raw.defaultFactory || "sunjune",
-          fuelFactor: Number(raw.fuelFactor) > 0 ? Number(raw.fuelFactor) : 1.25,
-          vatOn: typeof raw.vatOn === "boolean" ? raw.vatOn : true,
-          vatRate: raw.vatRate !== undefined && !isNaN(Number(raw.vatRate)) ? Number(raw.vatRate) : 8,
-          trips: Array.isArray(raw.trips) ? raw.trips : [],
-        };
-      }
-    } catch {}
+  function formatShortDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m) return "";
+    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    return `${m[3]}.${months[+m[2] - 1] || m[2]}`;
   }
 
-  function saveState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sjState));
-    } catch {}
+  function normalizeDateLabel(str) {
+    const raw = String(str || "").trim();
+    if (!raw) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return formatShortDate(raw);
+    const dm = /^(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-]\d{2,4})?$/.exec(raw);
+    if (dm) {
+      const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+      const d = String(+dm[1]).padStart(2, "0");
+      const mo = months[+dm[2] - 1];
+      if (mo) return `${d}.${mo}`;
+    }
+    return raw.toUpperCase();
   }
 
-  /* ---------- Time & Tariff Calculation Engine ---------- */
+  function splitTokens(str) {
+    return String(str || "")
+      .split(/[\s,;|\n\r]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   function parseTimeToMins(str) {
     const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
     if (!m) return null;
@@ -136,6 +140,13 @@
     const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
     if (!m) return String(str || "").trim();
     return `${String(+m[1]).padStart(2, "0")}:${String(+m[2]).padStart(2, "0")}:${String(+(m[3] || 0)).padStart(2, "0")}`;
+  }
+
+  function timeStrToExcelFraction(str) {
+    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
+    if (!m) return null;
+    const secs = +m[1] * 3600 + +m[2] * 60 + +(m[3] || 0);
+    return secs / 86400;
   }
 
   function fmtDuration(mins) {
@@ -164,10 +175,98 @@
     return total;
   }
 
-  function computeAutoTiming(trip) {
-    const veh = getVehicle(trip.truckCode);
-    const inM = parseTimeToMins(trip.inTime);
-    const outM0 = parseTimeToMins(trip.outTime);
+  function calcShellRange(fromIso, toIso) {
+    const f = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fromIso || "");
+    const t = /^(\d{4})-(\d{2})-(\d{2})$/.exec(toIso || "");
+    if (!f || !t) return { days: 0, label: "" };
+    const start = new Date(+f[1], +f[2] - 1, +f[3]);
+    const end = new Date(+t[1], +t[2] - 1, +t[3]);
+    if (end < start) return { days: 0, label: "" };
+    // Đếm đủ cả ngày đầu và ngày cuối
+    const days = Math.round((end - start) / 86400000) + 1;
+    const list = [];
+    const cap = Math.min(days, 31);
+    const months = new Set();
+    for (let i = 0; i < cap; i++) {
+      const cur = new Date(start);
+      cur.setDate(start.getDate() + i);
+      list.push({ d: cur.getDate(), m: cur.getMonth() + 1 });
+      months.add(cur.getMonth() + 1);
+    }
+    let label = "";
+    if (months.size === 1) {
+      const mo = list[0].m;
+      label = `ngày ${list.map((x) => x.d).join(", ")}/${mo}`;
+    } else {
+      label = `ngày ${list.map((x) => `${x.d}/${x.m}`).join(", ")}`;
+    }
+    return { days, label };
+  }
+
+  /* ---------- Phân tích cụm dòng từ dữ liệu nhập (Merge vs Split theo quy tắc) ---------- */
+  function expandDraftRows(t) {
+    const refs = splitTokens(t.bookingRefsText);
+    const ships = splitTokens(t.shipmentsText);
+    const bks = splitTokens(t.bookingsText);
+    const conts = splitTokens(t.contsText);
+    const vols = splitTokens(t.volumesText);
+    const ins = splitTokens(t.inTimesText);
+    const outs = splitTokens(t.outTimesText);
+
+    const rowCount = Math.max(1, bks.length, conts.length, ins.length, outs.length, refs.length > 1 ? refs.length : 1, ships.length > 1 ? ships.length : 1);
+    const isSplitByCont = conts.length > 1;
+    const isSplitByTime = ins.length > 1 || outs.length > 1;
+    const splitCosts = isSplitByCont || isSplitByTime;
+
+    const veh = getVehicle(t.truckCode);
+    const rows = [];
+    for (let i = 0; i < rowCount; i++) {
+      const refVal = refs.length === 1 ? (i === 0 ? refs[0] : "") : refs[i] || "";
+      const shipVal = ships.length === 1 ? (i === 0 ? ships[0] : "") : ships[i] || "";
+      const bkVal = bks.length === 1 ? (i === 0 ? bks[0] : "") : bks[i] || "";
+      const contVal = conts.length <= 1 ? (conts[0] || "") : conts[i] || "";
+      const volVal = vols[i] || (veh.isFcl ? veh.defaultVol : "");
+      const inVal = ins.length <= 1 ? (ins[0] || "") : ins[i] || "";
+      const outVal = outs.length <= 1 ? (outs[0] || "") : outs[i] || "";
+      rows.push({
+        ref: refVal,
+        shipment: shipVal,
+        booking: bkVal,
+        contNo: contVal,
+        volume: volVal,
+        inTime: inVal,
+        outTime: outVal,
+      });
+    }
+
+    // Tìm Volume lớn nhất trong cụm combine để in đậm
+    let maxVol = -Infinity;
+    const numericVols = rows.map((r) => {
+      const n = parseFloat(String(r.volume || "").replace(/,/g, ""));
+      return !isNaN(n) && /^[\d.,]+$/.test(String(r.volume || "").trim()) ? n : null;
+    });
+    const validNums = numericVols.filter((v) => v !== null);
+    if (rowCount > 1 && validNums.length >= 2) {
+      maxVol = Math.max(...validNums);
+    }
+    rows.forEach((r, idx) => {
+      r.isMaxVol = maxVol > -Infinity && numericVols[idx] === maxVol;
+    });
+
+    return {
+      rows,
+      rowCount,
+      mergeCont: !isSplitByCont && rowCount > 1,
+      mergeTime: !isSplitByTime && rowCount > 1,
+      mergeCost: !splitCosts && rowCount > 1,
+      splitCosts,
+    };
+  }
+
+  function computeTimingForPair(inStr, outStr, truckCode, deductLunch, nextDay) {
+    const veh = getVehicle(truckCode);
+    const inM = parseTimeToMins(inStr);
+    const outM0 = parseTimeToMins(outStr);
     if (inM == null || outM0 == null) {
       return {
         hasTime: false,
@@ -177,7 +276,6 @@
         netMins: 0,
         freeMins: veh.isFcl ? 240 : 120,
         excessMins: 0,
-        billableHours: 0,
         extraTrucks: 0,
         waitHours: 0,
         overnightCount: 0,
@@ -185,17 +283,17 @@
     }
 
     let outM = outM0;
-    const crossedMidnight = trip.nextDay || outM0 < inM;
+    const crossedMidnight = nextDay || outM0 < inM;
     if (crossedMidnight && outM <= inM) outM += 1440;
-    if (trip.nextDay && outM - inM < 0) outM += 1440;
+    if (nextDay && outM - inM < 0) outM += 1440;
 
     const rawMins = Math.max(0, outM - inM);
-    const lunchMins = trip.deductLunch ? lunchOverlapMins(inM, outM) : 0;
+    const lunchMins = deductLunch ? lunchOverlapMins(inM, outM) : 0;
     const netMins = Math.max(0, rawMins - lunchMins);
     const freeMins = veh.isFcl ? 240 : 120;
     const excessMins = Math.max(0, netMins - freeMins);
 
-    // Làm tròn theo mốc gần 55 phút (2h55' -> 1h chờ, 2h54' -> 0h chờ; cứ 4h = 1 truck)
+    // Làm tròn theo mốc 55 phút (2h55' -> 1h chờ, 2h54' -> 0h chờ; cứ 4h = 1 truck)
     const billableHours = Math.floor((excessMins + 5) / 60);
     const extraTrucks = Math.floor(billableHours / 4);
     const waitHours = billableHours % 4;
@@ -209,262 +307,369 @@
       netMins,
       freeMins,
       excessMins,
-      billableHours,
       extraTrucks,
       waitHours,
       overnightCount,
     };
   }
 
-  function calcTripMoney(trip) {
-    const veh = getVehicle(trip.truckCode);
-    const tariff = getTariff(trip.factoryKey || sjState.defaultFactory);
-    const baseVnd = Number(tariff.vnd[veh.colIdx]) || 0;
-    const fuel = Number(sjState.fuelFactor) > 0 ? Number(sjState.fuelFactor) : 1.25;
-
-    const timing = computeAutoTiming(trip);
-    const extraTrucks = Math.max(0, Number(trip.extraTrucks) || 0);
-    const cancelCount = Math.max(0, Number(trip.cancelCount) || 0);
-    const waitHours = Math.max(0, Number(trip.waitHours) || 0);
-    const overnightCount = Math.max(0, Number(trip.overnightCount) || 0);
-    const shellDays = Math.max(0, Number(trip.shellDays) || 0);
-
-    const truckUnit = round3(baseVnd * fuel);
-    const overnightUnit = round3(baseVnd * fuel * 0.8);
-
-    const truckFee = round3((extraTrucks + cancelCount) * truckUnit);
-    const waitFee = round3(waitHours * veh.waitRate);
-    const overnightFee = round3(overnightCount * overnightUnit);
-    const waitAndOvernight = round3(waitFee + overnightFee);
-    const shellFee = round3(shellDays * SHELL_FEE_PER_DAY);
-    const tendaFee = trip.tendaOn ? TENDA_FEE : 0;
-    const tollFee = round3(Math.max(0, Number(trip.tollFee) || 0));
-    const otherFee = round3(Math.max(0, Number(trip.otherFee) || 0));
-    const totalFee = round3(truckFee + waitAndOvernight + shellFee + tendaFee + tollFee + otherFee);
-
-    return {
-      veh,
-      tariff,
-      baseVnd,
-      fuel,
-      timing,
-      truckUnit,
-      overnightUnit,
-      truckFee,
-      waitFee,
-      overnightFee,
-      waitAndOvernight,
-      shellFee,
-      tendaFee,
-      tollFee,
-      otherFee,
-      totalFee,
-    };
+  function formatKAmount(amount) {
+    const n = Math.round(Number(amount) || 0);
+    if (n <= 0) return "";
+    if (n % 1000 === 0) return `${n / 1000}K`;
+    return fmt(n);
   }
 
-  function buildAutoNote(trip, calc) {
+  function buildAutoNote(t, rowOverride) {
     const parts = [];
-    if (trip.tendaOn) parts.push("PICKUP TENDA");
+    if (t.tendaOn) parts.push("Tenda");
 
-    const details = [];
-    if (calc.timing.hasTime) {
-      details.push(`xe vào ${trip.inTime.slice(0, 5)}, ra ${trip.outTime.slice(0, 5)}, tổng ${fmtHmShort(calc.timing.rawMins)}`);
+    const cancelCount = Math.max(0, Number(t.cancelCount) || 0);
+    if (cancelCount === 1) parts.push("Cancel");
+    else if (cancelCount > 1) parts.push(`${cancelCount} Cancel`);
+
+    const ovn = rowOverride ? rowOverride.overnightCount : Math.max(0, Number(t.overnightCount) || 0);
+    if (ovn > 0) parts.push(`${ovn} Over Night`);
+
+    const extra = rowOverride ? rowOverride.extraTrucks : Math.max(0, Number(t.extraTrucks) || 0);
+    if (extra > 0) parts.push(`${extra} Truck`);
+
+    const wait = rowOverride ? rowOverride.waitHours : Math.max(0, Number(t.waitHours) || 0);
+    if (wait > 0) parts.push(`${wait} Giờ chờ`);
+
+    const shellInfo = t.shellFrom && t.shellTo ? calcShellRange(t.shellFrom, t.shellTo) : { days: Math.max(0, Number(t.shellDays) || 0), label: "" };
+    if (shellInfo.days > 0) {
+      parts.push(`Gửi vỏ ${shellInfo.days} ngày${shellInfo.label ? ` (${shellInfo.label})` : ""}`);
     }
-    const charges = [];
-    const extra = Math.max(0, Number(trip.extraTrucks) || 0);
-    const cancel = Math.max(0, Number(trip.cancelCount) || 0);
-    const wait = Math.max(0, Number(trip.waitHours) || 0);
-    const ovn = Math.max(0, Number(trip.overnightCount) || 0);
-    const shell = Math.max(0, Number(trip.shellDays) || 0);
-    const toll = Math.max(0, Number(trip.tollFee) || 0);
-    const other = Math.max(0, Number(trip.otherFee) || 0);
 
-    if (extra > 0) charges.push(`${extra} Truck`);
-    if (cancel > 0) charges.push(`${cancel} Cancel Truck`);
-    if (wait > 0) charges.push(`${wait} Giờ chờ`);
-    if (ovn > 0) charges.push(`${ovn} Overnight`);
-    if (shell > 0) charges.push(`${shell} Ngày gửi vỏ`);
-    if (toll > 0) charges.push(`Cao tốc ${fmt(toll)}`);
-    if (other > 0) charges.push(`Phụ phí khác ${fmt(other)}`);
+    const toll = Math.max(0, Number(t.tollFee) || 0);
+    if (toll > 0) parts.push(`${formatKAmount(toll)} Cao tốc`);
 
-    if (details.length && charges.length) {
-      parts.push(`(${details[0]}) / Charge ${charges.join(" + ")}`);
-    } else if (charges.length) {
-      parts.push(`Charge ${charges.join(" + ")}`);
-    }
     return parts.join(" + ");
+  }
+
+  function calcTripDetails(t) {
+    const expanded = expandDraftRows(t);
+    const veh = getVehicle(t.truckCode);
+    const tariff = getTariff(t.factoryKey || sjState.defaultFactory);
+    const baseVnd = Number(tariff.vnd[veh.colIdx]) || 0;
+    const truckUnit = round3(baseVnd * FUEL_FACTOR);
+    const overnightUnit = round3(baseVnd * FUEL_FACTOR * 0.8);
+
+    const shellInfo = t.shellFrom && t.shellTo ? calcShellRange(t.shellFrom, t.shellTo) : { days: Math.max(0, Number(t.shellDays) || 0), label: "" };
+    const shellDays = shellInfo.days;
+    const shellFee = round3(shellDays * SHELL_FEE_PER_DAY);
+    const tendaFee = t.tendaOn ? TENDA_FEE : 0;
+    const tollFee = round3(Math.max(0, Number(t.tollFee) || 0));
+    const cancelCount = Math.max(0, Number(t.cancelCount) || 0);
+
+    if (!expanded.splitCosts) {
+      // Combine chung 1 chuyến / 1 Cont: chỉ tính 1 lần duy nhất
+      const timing = computeTimingForPair(expanded.rows[0].inTime, expanded.rows[0].outTime, t.truckCode, t.deductLunch, t.nextDay);
+      const extraTrucks = Math.max(0, Number(t.extraTrucks) || 0);
+      const waitHours = Math.max(0, Number(t.waitHours) || 0);
+      const overnightCount = Math.max(0, Number(t.overnightCount) || 0);
+
+      const truckCountTotal = extraTrucks + cancelCount;
+      const truckFee = round3(truckCountTotal * truckUnit);
+      const waitFee = round3(waitHours * veh.waitRate);
+      const overnightFee = round3(overnightCount * overnightUnit);
+      const waitAndOvernight = round3(waitFee + overnightFee);
+      const totalFee = round3(truckFee + waitAndOvernight + shellFee + tendaFee + tollFee);
+
+      const lineCalc = {
+        timing,
+        extraTrucks,
+        cancelCount,
+        truckCountTotal,
+        waitHours,
+        overnightCount,
+        shellDays,
+        truckFee,
+        waitFee,
+        overnightFee,
+        waitAndOvernight,
+        shellFee,
+        tendaFee,
+        tollFee,
+        totalFee,
+        note: t.note ?? buildAutoNote(t),
+      };
+
+      return {
+        expanded,
+        veh,
+        tariff,
+        baseVnd,
+        truckUnit,
+        overnightUnit,
+        lineCalcs: [lineCalc],
+        tripTotal: totalFee,
+      };
+    }
+
+    // Tách theo từng Cont / từng cặp In-Out: mỗi dòng tính riêng
+    const lineCalcs = expanded.rows.map((r, idx) => {
+      const timing = computeTimingForPair(r.inTime, r.outTime, t.truckCode, t.deductLunch, t.nextDay);
+      const extraTrucks = timing.hasTime ? timing.extraTrucks : Math.max(0, Number(t.extraTrucks) || 0);
+      const waitHours = timing.hasTime ? timing.waitHours : Math.max(0, Number(t.waitHours) || 0);
+      const overnightCount = timing.hasTime ? timing.overnightCount : Math.max(0, Number(t.overnightCount) || 0);
+
+      const truckCountTotal = extraTrucks + cancelCount;
+      const truckFee = round3(truckCountTotal * truckUnit);
+      const waitFee = round3(waitHours * veh.waitRate);
+      const overnightFee = round3(overnightCount * overnightUnit);
+      const waitAndOvernight = round3(waitFee + overnightFee);
+      const totalFee = round3(truckFee + waitAndOvernight + shellFee + tendaFee + tollFee);
+
+      const customOrAutoNote = idx === 0 && t.note && manualLocks.note ? t.note : buildAutoNote(t, { extraTrucks, waitHours, overnightCount });
+      return {
+        timing,
+        extraTrucks,
+        cancelCount,
+        truckCountTotal,
+        waitHours,
+        overnightCount,
+        shellDays,
+        truckFee,
+        waitFee,
+        overnightFee,
+        waitAndOvernight,
+        shellFee,
+        tendaFee,
+        tollFee,
+        totalFee,
+        note: customOrAutoNote,
+      };
+    });
+
+    const tripTotal = round3(lineCalcs.reduce((s, c) => s + c.totalFee, 0));
+    return { expanded, veh, tariff, baseVnd, truckUnit, overnightUnit, lineCalcs, tripTotal };
+  }
+
+  function calcStatementSummary(tripsList) {
+    const detailed = tripsList.map((t) => ({ trip: t, detail: calcTripDetails(t) }));
+    const subtotal = round3(detailed.reduce((s, x) => s + x.detail.tripTotal, 0));
+    const vatRate = sjState.vatOn ? Math.max(0, Number(sjState.vatRate) || 0) : 0;
+    const vatTax = sjState.vatOn && vatRate > 0 ? round3((subtotal * vatRate) / 100) : 0;
+    const grandTotal = round3(subtotal + vatTax);
+    const totalBookings = detailed.reduce((s, x) => s + x.detail.expanded.rowCount, 0);
+    return { detailed, subtotal, vatRate, vatTax, grandTotal, totalBookings };
   }
 
   function createEmptyDraft() {
     return {
       id: "sj_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
       date: formatShortDate(todayIso()),
-      contNo: "",
+      bookingRefsText: "",
+      shipmentsText: "",
+      bookingsText: "",
+      contsText: "",
       truckCode: "8T",
-      factoryKey: sjState.defaultFactory || "sunjune",
-      inTime: "",
-      outTime: "",
+      volumesText: "",
+      inTimesText: "",
+      outTimesText: "",
       nextDay: false,
       deductLunch: true,
+      factoryKey: sjState.defaultFactory || "sunjune",
       extraTrucks: 0,
       cancelCount: 0,
       waitHours: 0,
       overnightCount: 0,
+      shellFrom: "",
+      shellTo: "",
       shellDays: 0,
       tendaOn: true,
       tollFee: 0,
-      otherFee: 0,
+      note: "Tenda",
       misaInvoice: "",
-      note: "PICKUP TENDA",
-      bookings: [{ ref: "", shipment: "", booking: "", volume: "" }],
+      misaAmount: "",
+      lineMisa: [],
     };
   }
 
-  function formatShortDate(iso) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
-    if (!m) return "";
-    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-    return `${m[3]}.${months[+m[2] - 1] || m[2]}`;
+  function loadState() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      if (raw && typeof raw === "object") {
+        sjState = {
+          title: typeof raw.title === "string" && raw.title ? raw.title : "BẢNG TỔNG HỢP PHÁT SINH",
+          defaultFactory: raw.defaultFactory || "sunjune",
+          vatOn: typeof raw.vatOn === "boolean" ? raw.vatOn : true,
+          vatRate: raw.vatRate !== undefined && !isNaN(Number(raw.vatRate)) ? Number(raw.vatRate) : 8,
+          trips: Array.isArray(raw.trips) ? raw.trips : [],
+        };
+        return;
+      }
+      // Chuyển nhẹ dữ liệu cũ nếu có từ bản v1
+      const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || "null");
+      if (legacy && Array.isArray(legacy.trips) && legacy.trips.length) {
+        sjState.title = legacy.title || sjState.title;
+        sjState.vatOn = typeof legacy.vatOn === "boolean" ? legacy.vatOn : true;
+        sjState.vatRate = legacy.vatRate ?? 8;
+        sjState.trips = legacy.trips.map((old) => ({
+          id: old.id,
+          date: old.date || "",
+          bookingRefsText: (old.bookings || []).map((b) => b.ref).filter(Boolean).join(" "),
+          shipmentsText: (old.bookings || []).map((b) => b.shipment).filter(Boolean).join(" "),
+          bookingsText: (old.bookings || []).map((b) => b.booking).filter(Boolean).join(" "),
+          contsText: old.contNo || "",
+          truckCode: old.truckCode || "8T",
+          volumesText: (old.bookings || []).map((b) => b.volume).filter(Boolean).join(" "),
+          inTimesText: old.inTime || "",
+          outTimesText: old.outTime || "",
+          nextDay: !!old.nextDay,
+          deductLunch: old.deductLunch !== false,
+          factoryKey: old.factoryKey || "sunjune",
+          extraTrucks: Number(old.extraTrucks) || 0,
+          cancelCount: Number(old.cancelCount) || 0,
+          waitHours: Number(old.waitHours) || 0,
+          overnightCount: Number(old.overnightCount) || 0,
+          shellFrom: "",
+          shellTo: "",
+          shellDays: Number(old.shellDays) || 0,
+          tendaOn: !!old.tendaOn,
+          tollFee: Number(old.tollFee) || 0,
+          note: old.note || "",
+          misaInvoice: old.misaInvoice || "",
+          misaAmount: "",
+          lineMisa: [],
+        }));
+      }
+    } catch {}
   }
 
-  function calcSummary(tripsList) {
-    const calcs = tripsList.map((t) => ({ trip: t, calc: calcTripMoney(t) }));
-    const subtotal = round3(calcs.reduce((s, x) => s + x.calc.totalFee, 0));
-    const vatRate = sjState.vatOn ? Math.max(0, Number(sjState.vatRate) || 0) : 0;
-    const vatTax = sjState.vatOn && vatRate > 0 ? round3((subtotal * vatRate) / 100) : 0;
-    const grandTotal = round3(subtotal + vatTax);
-    const totalBookings = tripsList.reduce((s, t) => s + Math.max(1, (t.bookings || []).length), 0);
-    const showOtherCol = calcs.some((x) => x.calc.otherFee > 0);
-    return { calcs, subtotal, vatRate, vatTax, grandTotal, totalBookings, showOtherCol };
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sjState));
+    } catch {}
   }
 
-  /* ---------- Paste Parser for Combining Multiple Bookings ---------- */
-  function parsePastedBookings(rawText) {
-    const lines = String(rawText || "")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (!lines.length) return [];
-
-    return lines.map((line) => {
-      let cols = line.includes("\t") ? line.split("\t") : line.includes(",") ? line.split(",") : line.split(/\s+/);
-      cols = cols.map((c) => c.trim());
-      if (cols.length >= 4) {
-        return { ref: cols[0] || "", shipment: cols[1] || "", booking: cols[2] || "", volume: cols[3] || "" };
+  /* ---------- HTML Preview & Print Sheet (Đúng 18 cột & Dòng Date ngang) ---------- */
+  function groupTripsByDate(detailed) {
+    const groups = [];
+    const map = new Map();
+    detailed.forEach((item) => {
+      const dKey = normalizeDateLabel(item.trip.date) || "CHƯA GHI NGÀY";
+      if (!map.has(dKey)) {
+        const g = { dateLabel: dKey, items: [] };
+        map.set(dKey, g);
+        groups.push(g);
       }
-      if (cols.length === 3) {
-        const isLastNum = /^[\d.,]+$/.test(cols[2]) || /^(20|40|45)/i.test(cols[2]);
-        if (isLastNum) return { ref: cols[0] || "", shipment: "", booking: cols[1] || "", volume: cols[2] || "" };
-        return { ref: cols[0] || "", shipment: cols[1] || "", booking: cols[2] || "", volume: "" };
-      }
-      if (cols.length === 2) {
-        const isSecondVol = /^[\d.,]+$/.test(cols[1]);
-        return isSecondVol
-          ? { ref: "", shipment: "", booking: cols[0] || "", volume: cols[1] || "" }
-          : { ref: "", shipment: cols[0] || "", booking: cols[1] || "", volume: "" };
-      }
-      return { ref: "", shipment: "", booking: cols[0] || "", volume: "" };
+      map.get(dKey).items.push(item);
     });
+    return groups;
   }
 
-  /* ---------- HTML Preview & Print Sheet ---------- */
   function buildStatementHtml(tripsList, forPrint = false) {
-    const sum = calcSummary(tripsList);
-    const now = new Date();
-    const factoryInfo = getTariff(sjState.defaultFactory);
-    const hasOther = sum.showOtherCol;
-    const totalCols = hasOther ? 19 : 18;
-    const feeColSpan = hasOther ? 8 : 7;
+    const sum = calcStatementSummary(tripsList);
+    const groups = groupTripsByDate(sum.detailed);
+    const totalCols = forPrint ? 18 : 19;
 
     let bodyHtml = "";
-    if (!sum.calcs.length) {
-      bodyHtml = `<tr><td colspan="${totalCols}" style="text-align:center;color:#64748b;padding:24px;">Chưa có chuyến phát sinh nào. Hãy nhập chuyến mới ở bảng trên hoặc bấm <b>Nạp ví dụ mẫu</b> để xem thử.</td></tr>`;
+    if (!groups.length) {
+      bodyHtml = `<tr><td colspan="${totalCols}" style="text-align:center;color:#64748b;padding:26px;">Chưa có chuyến phát sinh nào. Hãy nhập thông tin bên trên hoặc bấm <b>Nạp ví dụ mẫu</b>.</td></tr>`;
     } else {
-      bodyHtml = sum.calcs
-        .map(({ trip, calc }) => {
-          const bks = trip.bookings && trip.bookings.length ? trip.bookings : [{ ref: "", shipment: "", booking: "", volume: "" }];
-          const rs = bks.length;
-          const spanAttr = rs > 1 ? ` rowspan="${rs}"` : "";
-          const truckCellText = calc.veh.truckCell;
+      bodyHtml = groups
+        .map((grp) => {
+          const dateRow = `<tr class="sj-date-row"><td colspan="${totalCols}">${esc(grp.dateLabel)}</td></tr>`;
+          const tripRows = grp.items
+            .map(({ trip, detail }) => {
+              const { expanded, veh, lineCalcs } = detail;
+              const rows = expanded.rows;
+              const n = rows.length;
+              const span = n > 1 ? ` rowspan="${n}"` : "";
 
-          return bks
-            .map((bk, idx) => {
-              const volText = bk.volume || (calc.veh.isFcl ? calc.veh.defaultVol : "");
-              const cells = [];
+              return rows
+                .map((r, idx) => {
+                  const lc = expanded.splitCosts ? lineCalcs[idx] : lineCalcs[0];
+                  const showCost = expanded.splitCosts || idx === 0;
+                  const costSpan = expanded.splitCosts ? "" : span;
+                  const contSpan = expanded.mergeCont ? span : "";
+                  const timeSpan = expanded.mergeTime ? span : "";
+                  const truckSpan = !expanded.splitCosts && n > 1 ? span : "";
 
-              if (idx === 0) cells.push(`<td${spanAttr} class="c">${esc(trip.date || "—")}</td>`);
-              cells.push(`<td class="c">${esc(bk.ref)}</td>`);
-              cells.push(`<td class="c">${esc(bk.shipment)}</td>`);
-              cells.push(`<td class="c">${esc(bk.booking)}</td>`);
-              if (idx === 0) cells.push(`<td${spanAttr} class="c">${esc(trip.contNo)}</td>`);
-              if (idx === 0) cells.push(`<td${spanAttr} class="c"><b>${esc(truckCellText)}</b></td>`);
-              cells.push(`<td class="c">${esc(volText)}</td>`);
+                  const cells = [];
+                  cells.push(`<td class="c">${esc(r.ref)}</td>`);
+                  cells.push(`<td class="c">${esc(r.shipment)}</td>`);
+                  cells.push(`<td class="c">${esc(r.booking)}</td>`);
+                  if (!expanded.mergeCont || idx === 0) {
+                    cells.push(`<td${contSpan} class="c">${esc(r.contNo)}</td>`);
+                  }
+                  if (expanded.splitCosts || idx === 0) {
+                    cells.push(`<td${truckSpan} class="c"><b>${esc(veh.truckCell)}</b></td>`);
+                  }
+                  cells.push(`<td class="c">${r.isMaxVol ? `<b>${esc(r.volume)}</b>` : esc(r.volume)}</td>`);
 
-              if (idx === 0) {
-                cells.push(`<td${spanAttr} class="c">${esc(trip.inTime ? fmtTimeStr(trip.inTime) : "")}</td>`);
-                cells.push(`<td${spanAttr} class="c">${esc(trip.outTime ? fmtTimeStr(trip.outTime) : "")}</td>`);
-                cells.push(`<td${spanAttr} class="c">${esc(calc.timing.loadingTime || "")}</td>`);
-                cells.push(`<td${spanAttr} class="r">${calc.truckFee ? fmt(calc.truckFee) : ""}</td>`);
-                cells.push(`<td${spanAttr} class="r">${calc.waitAndOvernight ? fmt(calc.waitAndOvernight) : ""}</td>`);
-                cells.push(`<td${spanAttr} class="r">${calc.shellFee ? fmt(calc.shellFee) : ""}</td>`);
-                cells.push(`<td${spanAttr} class="r">${calc.tendaFee ? fmt(calc.tendaFee) : ""}</td>`);
-                cells.push(`<td${spanAttr} class="r">${calc.tollFee ? fmt(calc.tollFee) : ""}</td>`);
-                if (hasOther) cells.push(`<td${spanAttr} class="r">${calc.otherFee ? fmt(calc.otherFee) : ""}</td>`);
-                cells.push(`<td${spanAttr} class="r"><b>${fmt(calc.totalFee)}</b></td>`);
-                cells.push(`<td${spanAttr} class="sj-note-cell">${esc(trip.note)}</td>`);
-                cells.push(`<td${spanAttr} class="c">${esc(trip.misaInvoice)}</td>`);
-                if (!forPrint) {
-                  cells.push(
-                    `<td${spanAttr} class="c sj-op-col">
-                      <div class="sj-row-ops">
-                        <button type="button" class="sj-op-btn" data-sj-edit="${esc(trip.id)}" title="Sửa chuyến này">Sửa</button>
-                        <button type="button" class="sj-op-btn" data-sj-dup="${esc(trip.id)}" title="Nhân bản">Nhân</button>
-                        <button type="button" class="sj-op-btn del" data-sj-del="${esc(trip.id)}" title="Xoá">Xoá</button>
-                      </div>
-                    </td>`
-                  );
-                }
-              }
+                  if (!expanded.mergeTime || idx === 0) {
+                    const rowTiming = computeTimingForPair(r.inTime, r.outTime, trip.truckCode, trip.deductLunch, trip.nextDay);
+                    cells.push(`<td${timeSpan} class="c">${esc(r.inTime ? fmtTimeStr(r.inTime) : "")}</td>`);
+                    cells.push(`<td${timeSpan} class="c">${esc(r.outTime ? fmtTimeStr(r.outTime) : "")}</td>`);
+                    cells.push(`<td${timeSpan} class="c">${esc(rowTiming.loadingTime || "")}</td>`);
+                  }
 
-              return `<tr>${cells.join("")}</tr>`;
+                  if (showCost) {
+                    const misaInv = expanded.splitCosts ? (trip.lineMisa?.[idx]?.inv ?? (idx === 0 ? trip.misaInvoice : "")) : (trip.misaInvoice || "");
+                    const misaAmt = expanded.splitCosts ? (trip.lineMisa?.[idx]?.amt ?? (idx === 0 ? trip.misaAmount : "")) : (trip.misaAmount || "");
+                    const lineIdxAttr = expanded.splitCosts ? idx : 0;
+
+                    cells.push(`<td${costSpan} class="r">${lc.truckFee ? fmt(lc.truckFee) : ""}</td>`);
+                    cells.push(`<td${costSpan} class="r">${lc.waitAndOvernight ? fmt(lc.waitAndOvernight) : ""}</td>`);
+                    cells.push(`<td${costSpan} class="r">${lc.shellFee ? fmt(lc.shellFee) : ""}</td>`);
+                    cells.push(`<td${costSpan} class="r">${lc.tendaFee ? fmt(lc.tendaFee) : ""}</td>`);
+                    cells.push(`<td${costSpan} class="r">${lc.tollFee ? fmt(lc.tollFee) : ""}</td>`);
+                    cells.push(`<td${costSpan} class="r"><b>${fmt(lc.totalFee)}</b></td>`);
+                    cells.push(`<td${costSpan} class="sj-note-cell">${esc(lc.note)}</td>`);
+
+                    if (forPrint) {
+                      cells.push(`<td${costSpan} class="c">${esc(misaInv)}</td>`);
+                      cells.push(`<td${costSpan} class="r">${misaAmt ? fmt(Number(String(misaAmt).replace(/,/g, "")) || 0) : ""}</td>`);
+                    } else {
+                      cells.push(
+                        `<td${costSpan} class="c hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="inv">${esc(misaInv)}</td>`
+                      );
+                      cells.push(
+                        `<td${costSpan} class="r hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="amt">${esc(misaAmt)}</td>`
+                      );
+                    }
+                  }
+
+                  if (!forPrint && idx === 0) {
+                    cells.push(
+                      `<td${span} class="c sj-op-col">
+                        <div class="sj-row-ops">
+                          <button type="button" class="sj-op-btn" data-sj-edit="${esc(trip.id)}">Sửa</button>
+                          <button type="button" class="sj-op-btn" data-sj-dup="${esc(trip.id)}">Nhân</button>
+                          <button type="button" class="sj-op-btn del" data-sj-del="${esc(trip.id)}">Xoá</button>
+                        </div>
+                      </td>`
+                    );
+                  }
+
+                  return `<tr>${cells.join("")}</tr>`;
+                })
+                .join("");
             })
             .join("");
+
+          return dateRow + tripRows;
         })
         .join("");
     }
 
-    const kv = (l, e, v, b) =>
-      v ? `<div class="kv">${l} <i>(${e})</i>: ${b ? `<b class="big">${esc(v)}</b>` : esc(v)}</div>` : "";
-
     return `<div class="sheet sj-sheet">
-      <div class="sh-top">
-        <div>${cfg.logo ? `<img src="${cfg.logo}" alt="">` : ""}</div>
-        <div class="sh-mid">
-          <h2>${esc(sjState.title || "BẢNG TỔNG HỢP PHÁT SINH")}</h2>
-          <div class="e">(SURCHARGE / EXTRA COST STATEMENT)</div>
-          <div>Ngày <i>(Date)</i> ${now.getDate()} tháng <i>(month)</i> ${now.getMonth() + 1} năm <i>(year)</i> ${now.getFullYear()}</div>
-        </div>
-        <div class="sh-r">Kỳ <i>(Period)</i>:<br><i style="white-space:nowrap">${esc(sjState.period) || "—"}</i></div>
-      </div>
-      ${kv("Đơn vị lập", "Issuer", cfg.name, 1)}
-      ${kv("Mã số thuế", "Tax code", cfg.tax)}
-      ${kv("Địa chỉ", "Address", cfg.addr)}
-      ${kv("Điện thoại", "Tel", cfg.tel)}
-      ${kv("Số tài khoản", "Bank account", cfg.bank)}
-      <hr style="border:0;border-top:1px solid #999;margin:8px 0">
-      ${kv("Khách hàng / Nhà máy áp Tariff", "Customer / Tariff", factoryInfo.desc, 1)}
+      <div class="sj-sheet-title">${esc(sjState.title || "BẢNG TỔNG HỢP PHÁT SINH")}</div>
 
       <table class="t sj-table">
         <thead>
           <tr>
-            <th colspan="7">Thông tin lô hàng</th>
+            <th colspan="6">Thông tin lô hàng</th>
             <th colspan="3">Thời gian xe</th>
-            <th colspan="${feeColSpan}">Chi phí phát sinh</th>
-            <th>Misa</th>
+            <th colspan="7">Chi phí phát sinh</th>
+            <th colspan="2">Misa</th>
             ${!forPrint ? `<th rowspan="2" class="sj-op-col">Thao tác</th>` : ""}
           </tr>
           <tr>
-            <th>Date</th>
             <th>Booking Ref</th>
             <th>Shipment</th>
             <th>Booking</th>
@@ -474,46 +679,42 @@
             <th>In</th>
             <th>Out</th>
             <th>Loading time</th>
-            <th>Cước xe / Huỷ xe</th>
-            <th>Lưu ca / Giờ chờ</th>
-            <th>Gửi vỏ</th>
+            <th>Cước xe / Huỷ Xe</th>
+            <th>Lưu Ca / Giờ Chờ</th>
+            <th>Gửi Vỏ</th>
             <th>Tenda</th>
             <th>Cao tốc</th>
-            ${hasOther ? "<th>Khác</th>" : ""}
             <th>Tổng trả</th>
             <th>NOTE</th>
             <th>Hoá đơn Misa</th>
+            <th>Tiền Misa</th>
           </tr>
         </thead>
         <tbody>${bodyHtml}</tbody>
       </table>
 
-      <table class="tt">
-        ${
-          sjState.vatOn && sum.vatTax > 0
-            ? `<tr><td>Tổng trước thuế <i>(Subtotal)</i>:</td><td>${fmt(sum.subtotal)}</td></tr>
-               <tr><td>Thuế suất GTGT ${esc(String(round3(sum.vatRate)))}% <i>(VAT ${esc(String(round3(sum.vatRate)))}%)</i>:</td><td>${fmt(sum.vatTax)}</td></tr>
-               <tr class="gt"><td>Tổng sau thuế <i>(Total payment)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
-            : `<tr class="gt"><td>Tổng cộng <i>(Total amount)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
-        }
-      </table>
-      <div class="wd">Số tiền viết bằng chữ <i>(Total amount in words)</i>: <b>${words(sum.grandTotal)}</b></div>
-      ${cfg.note ? `<div class="nt">${esc(cfg.note)}</div>` : ""}
-      <div class="sig">
-        <div><b>Người lập</b> <i>(Prepared by)</i><i class="sp"></i><b>${esc(cfg.signer)}</b></div>
-        <div><b>Khách hàng xác nhận</b> <i>(Customer confirmation)</i><i class="sp"></i><small>(Ký, đóng dấu / Signature, stamp)</small></div>
+      <div class="sj-vat-footer-wrap">
+        <table class="tt sj-vat-footer">
+          ${
+            sjState.vatOn && sum.vatTax > 0
+              ? `<tr><td>Tổng trước thuế <i>(Subtotal)</i>:</td><td>${fmt(sum.subtotal)}</td></tr>
+                 <tr><td>Thuế suất GTGT ${esc(String(round3(sum.vatRate)))}% <i>(VAT ${esc(String(round3(sum.vatRate)))}%)</i>:</td><td>${fmt(sum.vatTax)}</td></tr>
+                 <tr class="gt"><td>Tổng sau thuế <i>(Total payment)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
+              : `<tr class="gt"><td>Tổng sau thuế <i>(Total payment)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
+          }
+        </table>
       </div>
     </div>`;
   }
 
-  /* ---------- Excel Export with Real Merge Cells ---------- */
+  /* ---------- Xuất Excel chuẩn 18 cột, công thức thật & bảng thuế 3 dòng bên phải ---------- */
   async function buildSunjuneXlsxBuffer(tripsList) {
     if (typeof ExcelJS === "undefined") {
       throw new Error("Thư viện xuất Excel (ExcelJS) chưa sẵn sàng. Vui lòng kiểm tra kết nối mạng và tải lại trang.");
     }
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Bang_Ke_Phat_Sinh", {
-      views: [{ showGridLines: false }],
+      views: [{ showGridLines: true }],
       pageSetup: {
         orientation: "landscape",
         paperSize: 9,
@@ -525,45 +726,16 @@
       },
     });
 
-    const sum = calcSummary(tripsList);
-    const hasOther = sum.showOtherCol;
-    const now = new Date();
-    const factoryInfo = getTariff(sjState.defaultFactory);
+    const sum = calcStatementSummary(tripsList);
+    const groups = groupTripsByDate(sum.detailed);
 
-    const colDefs = [
-      { h: "Date", w: 10 },
-      { h: "Booking Ref", w: 15 },
-      { h: "Shipment", w: 13 },
-      { h: "Booking", w: 18 },
-      { h: "Cont No.", w: 14 },
-      { h: "Type of Truck", w: 12 },
-      { h: "Volume", w: 10 },
-      { h: "In", w: 10 },
-      { h: "Out", w: 10 },
-      { h: "Loading time", w: 12 },
-      { h: "Cước xe / Huỷ Xe", w: 15, num: true },
-      { h: "Lưu Ca / Giờ Chờ", w: 15, num: true },
-      { h: "Gửi Vỏ", w: 13, num: true },
-      { h: "Tenda", w: 12, num: true },
-      { h: "Cao tốc", w: 12, num: true },
-      ...(hasOther ? [{ h: "Khác", w: 12, num: true }] : []),
-      { h: "Tổng trả", w: 15, num: true },
-      { h: "NOTE", w: 34 },
-      { h: "Hoá đơn Misa", w: 13 },
-    ];
+    const colWidths = [15, 13, 18, 14, 12, 10, 10, 10, 12, 16, 16, 13, 12, 12, 16, 38, 14, 15];
+    ws.columns = colWidths.map((w) => ({ width: w, style: { font: { name: "Times New Roman", size: 11 } } }));
 
-    const n = colDefs.length;
-    const A = 2;
-    const Z = n + 1;
-    const W = n + 2;
-    const totalColNum = A + colDefs.findIndex((c) => c.h === "Tổng trả");
-
-    const G = "FF8A8896";
-    const BL = "FF000000";
-    const GR = "FF444444";
+    const G = "FF64748B";
     const ln = (c) => ({ style: "thin", color: { argb: c } });
     const bd = { top: ln(G), left: ln(G), bottom: ln(G), right: ln(G) };
-    const ft = (z, b, i, c) => ({
+    const ft = (z = 11, b = false, i = false, c = null) => ({
       name: "Times New Roman",
       size: z,
       bold: !!b,
@@ -573,358 +745,292 @@
     const rt = (...p) => ({ richText: p.map(([t, z, b, i, c]) => ({ text: t, font: ft(z || 11, b, i, c) })) });
     const fill = (a) => ({ type: "pattern", pattern: "solid", fgColor: { argb: a } });
 
-    ws.columns = [1.5, ...colDefs.map((c) => c.w), 1.5].map((w) => ({ width: w, style: { font: ft(10) } }));
+    // Tiêu đề gọn đúng chuẩn form mẫu
+    const titleRow = ws.addRow([sjState.title || "BẢNG TỔNG HỢP PHÁT SINH"]);
+    ws.mergeCells(1, 1, 1, 18);
+    titleRow.height = 28;
+    const tc = titleRow.getCell(1);
+    tc.font = ft(14, true);
+    tc.alignment = { horizontal: "left", vertical: "middle" };
 
-    const sp = (h) => {
-      ws.addRow([]).height = h;
-    };
-    const mg = (v, al, h, a = A, z = Z, va = "middle") => {
-      const r = ws.addRow([]);
-      if (z > a) ws.mergeCells(r.number, a, r.number, z);
-      const c = r.getCell(a);
-      c.value = v;
-      if (typeof v === "string") c.font = ft(10);
-      c.alignment = { horizontal: al || "left", vertical: va, wrapText: true };
-      if (h) r.height = h;
-      return r;
-    };
+    ws.addRow([]).height = 8;
 
-    const img = cfg.logo
-      ? wb.addImage({ base64: cfg.logo.replace(/^data:image\/\w+;base64,/, ""), extension: "png" })
-      : null;
-
-    sp(6);
-    const titleStart = A + 3;
-    const titleEnd = Z - 3;
-    mg(rt([sjState.title || "BẢNG TỔNG HỢP PHÁT SINH", 18, 1]), "center", 30, titleStart, titleEnd);
-    mg(rt(["(SURCHARGE / EXTRA COST STATEMENT)", 12, 1, 1]), "center", 20, titleStart, titleEnd);
-    mg(
-      rt(
-        ["Ngày "],
-        ["(Date)", 10, 0, 1, GR],
-        [` ${now.getDate()} tháng `],
-        ["(month)", 10, 0, 1, GR],
-        [` ${now.getMonth() + 1} năm `],
-        ["(year)", 10, 0, 1, GR],
-        [` ${now.getFullYear()}`]
-      ),
-      "center",
-      20,
-      titleStart,
-      titleEnd
-    );
-
-    ws.mergeCells(2, titleEnd + 1, 4, Z);
-    const periodCell = ws.getCell(2, titleEnd + 1);
-    periodCell.value = rt(["Kỳ "], ["(Period)", 10, 0, 1, GR], [":\n"], [sjState.period || "—", 10, 0, 1]);
-    periodCell.alignment = { horizontal: "right", vertical: "middle", wrapText: true };
-
-    if (img !== null) {
-      const lr = cfg.lr > 0 ? cfg.lr : 2.5149;
-      ws.addImage(img, { tl: { col: 1.2, row: 1.2 }, ext: { width: Math.round(64 * lr), height: 64 }, editAs: "oneCell" });
-    }
-
-    sp(6);
-    const kv = (l, e, v, big) =>
-      v && mg(rt([`${l} `], [`(${e})`, 10, 0, 1, GR], [": "], [v, big ? 13 : 10, big]), "left", big ? 22 : 16);
-    kv("Đơn vị lập", "Issuer", cfg.name, 1);
-    kv("Mã số thuế", "Tax code", cfg.tax);
-    kv("Địa chỉ", "Address", cfg.addr);
-    kv("Điện thoại", "Tel", cfg.tel);
-    kv("Số tài khoản", "Bank account", cfg.bank);
-    kv("Khách hàng / Tariff", "Customer", factoryInfo.desc, 1);
-    sp(6);
-
-    // Group Header Row + Column Header Row
+    // 2 dòng Header nhóm + cột
     const ghRow = ws.addRow([]);
     ghRow.height = 22;
-    const chRow = ws.addRow([]);
-    chRow.height = 28;
+    const chRow = ws.addRow([
+      "Booking Ref",
+      "Shipment",
+      "Booking",
+      "Cont No.",
+      "Type of Truck",
+      "Volume",
+      "In",
+      "Out",
+      "Loading time",
+      "Cước xe/Huỷ Xe",
+      "Lưu Ca/Giờ Chờ",
+      "Gửi Vỏ",
+      "Tenda",
+      "Cao tốc",
+      "Tổng trả",
+      "NOTE",
+      "Hoá đơn Misa",
+      "Tiền Misa",
+    ]);
+    chRow.height = 26;
     ws.pageSetup.printTitlesRow = `${ghRow.number}:${chRow.number}`;
 
-    const feeGroupCount = hasOther ? 8 : 7;
-    const groups = [
-      { title: "Thông tin lô hàng", start: A, span: 7, bg: "FFE2E8F0" },
-      { title: "Thời gian xe", start: A + 7, span: 3, bg: "FFE0F2FE" },
-      { title: "Chi phí phát sinh", start: A + 10, span: feeGroupCount, bg: "FFFEF3C7" },
-      { title: "Misa", start: A + 10 + feeGroupCount, span: 1, bg: "FFDCFCE7" },
+    const headerGroups = [
+      { title: "Thông tin lô hàng", start: 1, span: 6, bg: "FFE2E8F0" },
+      { title: "Thời gian xe", start: 7, span: 3, bg: "FFE0F2FE" },
+      { title: "Chi phí phát sinh", start: 10, span: 7, bg: "FFFEF3C7" },
+      { title: "Misa", start: 17, span: 2, bg: "FFDCFCE7" },
     ];
-    groups.forEach((g) => {
+    headerGroups.forEach((g) => {
       if (g.span > 1) ws.mergeCells(ghRow.number, g.start, ghRow.number, g.start + g.span - 1);
-      const c = ghRow.getCell(g.start);
-      c.value = g.title;
-      c.font = ft(10, 1);
-      c.alignment = { horizontal: "center", vertical: "middle" };
-      for (let x = g.start; x < g.start + g.span; x++) {
-        ghRow.getCell(x).fill = fill(g.bg);
-        ghRow.getCell(x).border = bd;
+      const cell = ghRow.getCell(g.start);
+      cell.value = g.title;
+      cell.font = ft(11, true);
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      for (let c = g.start; c <= g.start + g.span - 1; c++) {
+        ghRow.getCell(c).fill = fill(g.bg);
+        ghRow.getCell(c).border = bd;
       }
     });
+    for (let c = 1; c <= 18; c++) {
+      const cell = chRow.getCell(c);
+      cell.font = ft(11, true);
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      cell.fill = fill("FFF1F5F9");
+      cell.border = bd;
+    }
 
-    colDefs.forEach((col, idx) => {
-      const c = chRow.getCell(A + idx);
-      c.value = col.h;
-      c.font = ft(10, 1);
-      c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-      c.fill = fill("FFF1F5F9");
-      c.border = bd;
-    });
+    const totalFormulaRefs = [];
 
-    // Data Rows with exact merge rules:
-    // Merge: Date (0), Cont No. (4), Type of Truck (5), In (7), Out (8), Loading time (9),
-    //        and all cost/NOTE/Misa cols (10 .. n-1).
-    // Never merge: Booking Ref (1), Shipment (2), Booking (3), Volume (6).
-    const mergeColIndices = [0, 4, 5, 7, 8, 9];
-    for (let idx = 10; idx < n; idx++) mergeColIndices.push(idx);
+    groups.forEach((grp) => {
+      // Dòng Ngày nằm ngang
+      const dRow = ws.addRow([grp.dateLabel]);
+      dRow.height = 20;
+      ws.mergeCells(dRow.number, 1, dRow.number, 18);
+      dRow.getCell(1).font = ft(11, true);
+      dRow.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+      for (let c = 1; c <= 18; c++) {
+        dRow.getCell(c).fill = fill("FFF8FAFC");
+        dRow.getCell(c).border = bd;
+      }
 
-    const dataStartRow = chRow.number + 1;
+      grp.items.forEach(({ trip, detail }) => {
+        const { expanded, veh, baseVnd, lineCalcs } = detail;
+        const rows = expanded.rows;
+        const startRowNum = ws.rowCount + 1;
 
-    sum.calcs.forEach(({ trip, calc }) => {
-      const bks = trip.bookings && trip.bookings.length ? trip.bookings : [{ ref: "", shipment: "", booking: "", volume: "" }];
-      const startRowNum = ws.rowCount + 1;
+        rows.forEach((r, idx) => {
+          const xlRow = ws.addRow([]);
+          const rn = xlRow.number;
+          xlRow.height = 22;
 
-      bks.forEach((bk, idx) => {
-        const r = ws.addRow([]);
-        r.height = 21;
-        const volText = bk.volume || (calc.veh.isFcl ? calc.veh.defaultVol : "");
+          const setC = (col, val, align = "center", bold = false, numFmtStr = null) => {
+            const cell = xlRow.getCell(col);
+            cell.value = val;
+            cell.font = ft(11, bold);
+            cell.alignment = { horizontal: align, vertical: "middle", wrapText: true };
+            cell.border = bd;
+            if (numFmtStr) cell.numFmt = numFmtStr;
+            return cell;
+          };
 
-        const setCell = (colIdx, val, align = "center", isNum = false, isBold = false) => {
-          const cell = r.getCell(A + colIdx);
-          cell.value = val;
-          cell.font = ft(10, isBold);
-          cell.alignment = { horizontal: align, vertical: "middle", wrapText: true };
-          cell.border = bd;
-          if (isNum && typeof val === "number" && val !== 0) cell.numFmt = xlsxFmt(val);
-        };
+          setC(1, r.ref || "");
+          setC(2, r.shipment || "");
+          setC(3, r.booking || "");
+          setC(4, !expanded.mergeCont || idx === 0 ? r.contNo || "" : "");
+          setC(5, !expanded.splitCosts && idx > 0 ? "" : veh.truckCell, "center", true);
 
-        setCell(0, idx === 0 ? trip.date || "" : "", "center");
-        setCell(1, bk.ref || "", "center");
-        setCell(2, bk.shipment || "", "center");
-        setCell(3, bk.booking || "", "center");
-        setCell(4, idx === 0 ? trip.contNo || "" : "", "center");
-        setCell(5, idx === 0 ? calc.veh.truckCell : "", "center", false, true);
-        setCell(6, volText, "center");
-        setCell(7, idx === 0 && trip.inTime ? fmtTimeStr(trip.inTime) : "", "center");
-        setCell(8, idx === 0 && trip.outTime ? fmtTimeStr(trip.outTime) : "", "center");
-        setCell(9, idx === 0 ? calc.timing.loadingTime || "" : "", "center");
+          // Volume (nếu là số hợp lệ giữ kiểu số; lớn nhất in đậm!)
+          const volTrim = String(r.volume || "").trim();
+          const volNum = /^[\d.,]+$/.test(volTrim) ? parseFloat(volTrim.replace(/,/g, "")) : NaN;
+          setC(6, !isNaN(volNum) ? volNum : volTrim, "center", !!r.isMaxVol);
 
-        let cIdx = 10;
-        setCell(cIdx++, idx === 0 && calc.truckFee ? calc.truckFee : "", "right", true);
-        setCell(cIdx++, idx === 0 && calc.waitAndOvernight ? calc.waitAndOvernight : "", "right", true);
-        setCell(cIdx++, idx === 0 && calc.shellFee ? calc.shellFee : "", "right", true);
-        setCell(cIdx++, idx === 0 && calc.tendaFee ? calc.tendaFee : "", "right", true);
-        setCell(cIdx++, idx === 0 && calc.tollFee ? calc.tollFee : "", "right", true);
-        if (hasOther) setCell(cIdx++, idx === 0 && calc.otherFee ? calc.otherFee : "", "right", true);
-        setCell(cIdx++, idx === 0 ? calc.totalFee : "", "right", true, true);
-        setCell(cIdx++, idx === 0 ? trip.note || "" : "", "left");
-        setCell(cIdx++, idx === 0 ? trip.misaInvoice || "" : "", "center");
-      });
+          // In / Out / Loading time (=Out - In)
+          const showTime = !expanded.mergeTime || idx === 0;
+          const inFrac = showTime ? timeStrToExcelFraction(r.inTime) : null;
+          const outFrac = showTime ? timeStrToExcelFraction(r.outTime) : null;
+          setC(7, inFrac !== null ? inFrac : (showTime ? r.inTime || "" : ""), "center", false, inFrac !== null ? "hh:mm:ss" : null);
+          setC(8, outFrac !== null ? outFrac : (showTime ? r.outTime || "" : ""), "center", false, outFrac !== null ? "hh:mm:ss" : null);
 
-      const endRowNum = ws.rowCount;
-      if (endRowNum > startRowNum) {
-        mergeColIndices.forEach((colIdx) => {
-          const excelCol = A + colIdx;
-          ws.mergeCells(startRowNum, excelCol, endRowNum, excelCol);
+          const rowTiming = showTime ? computeTimingForPair(r.inTime, r.outTime, trip.truckCode, trip.deductLunch, trip.nextDay) : null;
+          if (showTime && inFrac !== null && outFrac !== null && rowTiming?.hasTime) {
+            const ltFormula = trip.nextDay && outFrac >= inFrac
+              ? `H${rn}+1-G${rn}`
+              : `IF(H${rn}<G${rn},H${rn}+1-G${rn},H${rn}-G${rn})`;
+            setC(9, { formula: ltFormula, result: rowTiming.rawMins / 1440 }, "center", false, "[h]:mm:ss");
+          } else {
+            setC(9, showTime ? rowTiming?.loadingTime || "" : "");
+          }
+
+          // Chi phí phát sinh với công thức Excel thật
+          const showCost = expanded.splitCosts || idx === 0;
+          const lc = expanded.splitCosts ? lineCalcs[idx] : lineCalcs[0];
+          if (showCost) {
+            if (lc.truckCountTotal > 0) {
+              setC(10, { formula: `ROUND(${baseVnd}*${FUEL_FACTOR}*${lc.truckCountTotal},3)`, result: lc.truckFee }, "right", false, xlsxFmt(lc.truckFee));
+            } else {
+              setC(10, "");
+            }
+
+            const waitParts = [];
+            if (lc.waitHours > 0) waitParts.push(`${lc.waitHours}*${veh.waitRate}`);
+            if (lc.overnightCount > 0) waitParts.push(`${lc.overnightCount}*${baseVnd}*${FUEL_FACTOR}*0.8`);
+            if (waitParts.length) {
+              setC(11, { formula: `ROUND(${waitParts.join("+")},3)`, result: lc.waitAndOvernight }, "right", false, xlsxFmt(lc.waitAndOvernight));
+            } else {
+              setC(11, "");
+            }
+
+            if (lc.shellDays > 0) {
+              setC(12, { formula: `${lc.shellDays}*${SHELL_FEE_PER_DAY}`, result: lc.shellFee }, "right", false, xlsxFmt(lc.shellFee));
+            } else {
+              setC(12, "");
+            }
+
+            setC(13, lc.tendaFee ? lc.tendaFee : "", "right", false, lc.tendaFee ? "#,##0" : null);
+            setC(14, lc.tollFee ? lc.tollFee : "", "right", false, lc.tollFee ? xlsxFmt(lc.tollFee) : null);
+            setC(15, { formula: `ROUND(SUM(J${rn}:N${rn}),3)`, result: lc.totalFee }, "right", true, xlsxFmt(lc.totalFee));
+            totalFormulaRefs.push(`O${rn}`);
+
+            setC(16, lc.note || "", "left");
+
+            const misaInv = expanded.splitCosts ? (trip.lineMisa?.[idx]?.inv ?? (idx === 0 ? trip.misaInvoice : "")) : (trip.misaInvoice || "");
+            const misaAmtRaw = expanded.splitCosts ? (trip.lineMisa?.[idx]?.amt ?? (idx === 0 ? trip.misaAmount : "")) : (trip.misaAmount || "");
+            const misaNum = parseFloat(String(misaAmtRaw || "").replace(/,/g, ""));
+            setC(17, misaInv || "");
+            setC(18, !isNaN(misaNum) && misaNum > 0 ? misaNum : (misaAmtRaw || ""), "right", false, !isNaN(misaNum) && misaNum > 0 ? xlsxFmt(misaNum) : null);
+          } else {
+            for (let col = 10; col <= 18; col++) setC(col, "");
+          }
         });
-      }
+
+        const endRowNum = ws.rowCount;
+        if (endRowNum > startRowNum) {
+          if (expanded.mergeCont) ws.mergeCells(startRowNum, 4, endRowNum, 4);
+          if (!expanded.splitCosts) ws.mergeCells(startRowNum, 5, endRowNum, 5);
+          if (expanded.mergeTime) {
+            ws.mergeCells(startRowNum, 7, endRowNum, 7);
+            ws.mergeCells(startRowNum, 8, endRowNum, 8);
+            ws.mergeCells(startRowNum, 9, endRowNum, 9);
+          }
+          if (expanded.mergeCost) {
+            for (let col = 10; col <= 18; col++) {
+              ws.mergeCells(startRowNum, col, endRowNum, col);
+            }
+          }
+        }
+      });
     });
 
-    const dataEndRow = ws.rowCount;
-    const totalColLetter = ws.getColumn(totalColNum).letter;
-
-    const addSummaryRow = (label, formulaOrVal, numFmtStr, bold = false) => {
+    // Bảng Thuế 3 dòng đóng khung gọn bên phải giống ảnh mẫu (cột 15-16 nhãn | cột 17-18 số tiền)
+    const firstDataRow = chRow.number + 1;
+    const lastDataRow = ws.rowCount;
+    ws.addRow([]).height = 10;
+    const sumFormulaExpr = totalFormulaRefs.length ? `ROUND(SUM(O${firstDataRow}:O${lastDataRow}),3)` : "0";
+    const addVatBoxRow = (labelRich, valOrFormula, numFmtStr, boldVal = true) => {
       const r = ws.addRow([]);
-      r.height = bold ? 23 : 20;
-      ws.mergeCells(r.number, A, r.number, totalColNum - 1);
-      const lc = r.getCell(A);
-      lc.value = label;
-      lc.font = ft(10, true);
+      r.height = 22;
+      ws.mergeCells(r.number, 15, r.number, 16);
+      ws.mergeCells(r.number, 17, r.number, 18);
+      const lc = r.getCell(15);
+      lc.value = labelRich;
       lc.alignment = { horizontal: "right", vertical: "middle" };
-
-      const vc = r.getCell(totalColNum);
-      vc.value = formulaOrVal;
-      vc.font = ft(bold ? 11 : 10, true);
+      const vc = r.getCell(17);
+      vc.value = valOrFormula;
+      vc.font = ft(11, boldVal);
       vc.alignment = { horizontal: "right", vertical: "middle" };
-      if (numFmtStr) vc.numFmt = numFmtStr;
-
-      if (Z > totalColNum) {
-        if (Z > totalColNum + 1) ws.mergeCells(r.number, totalColNum + 1, r.number, Z);
-      }
-      for (let x = A; x <= Z; x++) r.getCell(x).border = bd;
+      vc.numFmt = numFmtStr;
+      for (let c = 15; c <= 18; c++) r.getCell(c).border = bd;
       return r;
     };
 
-    const hasRows = dataEndRow >= dataStartRow;
+    const subRow = addVatBoxRow(
+      rt(["Tổng trước thuế "], ["(Subtotal)", 11, false, true], [":"]),
+      totalFormulaRefs.length ? { formula: sumFormulaExpr, result: sum.subtotal } : 0,
+      xlsxFmt(sum.subtotal),
+      true
+    );
     if (sjState.vatOn && sum.vatTax > 0) {
-      const subRow = addSummaryRow(
-        "TỔNG TRƯỚC THUẾ (VND)",
-        hasRows ? { formula: `ROUND(SUM(${totalColLetter}${dataStartRow}:${totalColLetter}${dataEndRow}),3)`, result: sum.subtotal } : sum.subtotal,
-        xlsxFmt(sum.subtotal),
-        false
-      );
-      const rateRow = addSummaryRow("THUẾ SUẤT (VAT)", round3(sum.vatRate) / 100, "0.0%", false);
-      const taxRow = addSummaryRow(
-        "TIỀN THUẾ (VND)",
-        {
-          formula: `ROUND(${totalColLetter}${subRow.number}*${totalColLetter}${rateRow.number},3)`,
-          result: sum.vatTax,
-        },
+      const rateStr = String(round3(sum.vatRate));
+      const vatRow = addVatBoxRow(
+        rt([`Thuế suất GTGT ${rateStr}% `], [`(VAT ${rateStr}%)`, 11, false, true], [":"]),
+        { formula: `ROUND(Q${subRow.number}*${round3(sum.vatRate) / 100},3)`, result: sum.vatTax },
         xlsxFmt(sum.vatTax),
-        false
+        true
       );
-      addSummaryRow(
-        "TỔNG SAU THUẾ (VND)",
-        {
-          formula: `ROUND(${totalColLetter}${subRow.number}+${totalColLetter}${taxRow.number},3)`,
-          result: sum.grandTotal,
-        },
+      addVatBoxRow(
+        rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
+        { formula: `ROUND(Q${subRow.number}+Q${vatRow.number},3)`, result: sum.grandTotal },
         xlsxFmt(sum.grandTotal),
         true
       );
     } else {
-      addSummaryRow(
-        "TỔNG CỘNG (VND)",
-        hasRows ? { formula: `ROUND(SUM(${totalColLetter}${dataStartRow}:${totalColLetter}${dataEndRow}),3)`, result: sum.grandTotal } : sum.grandTotal,
+      addVatBoxRow(
+        rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
+        { formula: `Q${subRow.number}`, result: sum.grandTotal },
         xlsxFmt(sum.grandTotal),
         true
       );
     }
 
-    const wordsRow = mg(
-      rt(["Số tiền viết bằng chữ "], ["(Total amount in words)", 10, 0, 1], [": "], [words(sum.grandTotal), 10, 1, 1]),
-      "left",
-      22
-    );
-    for (let x = A; x <= Z; x++) wordsRow.getCell(x).border = bd;
-
-    if (cfg.note) {
-      sp(5);
-      mg(cfg.note, "left", 16 * cfg.note.split("\n").length, A, Z, "top");
-    }
-
-    sp(10);
-    const half = Math.floor(n / 2);
-    const two = (a, b, h) => {
-      const r = ws.addRow([]);
-      ws.mergeCells(r.number, A, r.number, A + half - 1);
-      ws.mergeCells(r.number, A + half, r.number, Z);
-      r.height = h;
-      [
-        [A, a],
-        [A + half, b],
-      ].forEach(([x, v]) => {
-        const c = r.getCell(x);
-        c.value = v;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-      });
-    };
-    two(rt(["Người lập ", 10, 1], ["(Prepared by)", 10, 0, 1]), rt(["Khách hàng xác nhận ", 10, 1], ["(Customer confirmation)", 10, 0, 1]), 20);
-    two("", "", 64);
-    two(rt([cfg.signer || " ", 10, 1]), rt(["(Ký, đóng dấu / Signature, stamp)", 9, 0, 1, "FF555555"]), 18);
-
-    sp(6);
-    const last = ws.rowCount;
-    const T = { style: "thick", color: { argb: BL } };
-    const t = ln(BL);
-    for (let r = 1; r <= last; r++) {
-      for (let c = 1; c <= W; c++) {
-        const b = {};
-        if (r === 1) {
-          b.top = T;
-          b.bottom = t;
-        }
-        if (r === last) {
-          b.bottom = T;
-          b.top = t;
-        }
-        if (c === 1) {
-          b.left = T;
-          b.right = t;
-        }
-        if (c === W) {
-          b.right = T;
-          b.left = t;
-        }
-        if (b.top || b.bottom || b.left || b.right) ws.getCell(r, c).border = b;
-      }
-    }
-    ws.pageSetup.printArea = `A1:${ws.getColumn(W).letter}${last}`;
     return wb.xlsx.writeBuffer();
   }
 
-  /* ---------- UI Rendering & Interactive Form ---------- */
+  /* ---------- Giao diện 2 khối gọn gàng ---------- */
   function renderWorkspaceShell() {
     const root = $("#vSunjune");
     if (!root) return;
 
     root.innerHTML = `
       <div class="sj-shell">
-        <!-- Top Settings & KPIs -->
+        <!-- Thanh trên gọn -->
         <div class="sj-top-card">
-          <div class="sj-top-head">
-            <div>
-              <h1 class="sj-title">Bảng kê phát sinh vận tải</h1>
-              <p class="sj-sub">Nhập Booking & loại xe (hàng lẻ combine hoặc FCL) — tự gộp ô, tính cước theo Tariff VND, giờ chờ, lưu ca và VAT 8%.</p>
+          <div class="sj-top-bar">
+            <div class="sj-title-group">
+              <input id="sjTitle" class="sj-title-input" type="text" value="${esc(sjState.title)}" aria-label="Tiêu đề bảng kê">
+              <div class="sj-vat-inline">
+                <label class="check-inline">
+                  <input id="sjVatOn" type="checkbox" ${sjState.vatOn ? "checked" : ""}>
+                  <span>VAT</span>
+                </label>
+                <input id="sjVatRate" type="number" min="0" max="100" step="0.5" value="${esc(sjState.vatRate)}">
+                <span>%</span>
+              </div>
             </div>
             <div class="sj-top-btns">
-              <button type="button" class="btn btn-sm btn-ghost" id="sjToggleTariff">Xem bảng giá Tariff</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="sjToggleTariff">Bảng giá Tariff</button>
               <button type="button" class="btn btn-sm btn-ghost" id="sjLoadSample">Nạp ví dụ mẫu</button>
               <button type="button" class="btn btn-sm btn-ghost" id="sjClearAll">Xoá bảng kê</button>
             </div>
           </div>
-
-          <div class="sj-meta-grid">
-            <label class="sj-field">
-              <span>Tiêu đề bảng kê</span>
-              <input id="sjTitle" type="text" value="${esc(sjState.title)}">
-            </label>
-            <label class="sj-field">
-              <span>Kỳ phát sinh</span>
-              <input id="sjPeriod" type="text" placeholder="VD: 23.10 - 06.11.26" value="${esc(sjState.period)}">
-            </label>
-            <label class="sj-field">
-              <span>Nhà máy mặc định (Tariff VND)</span>
-              <select id="sjDefaultFactory">
-                ${VN_TARIFF.map((t) => `<option value="${esc(t.key)}" ${t.key === sjState.defaultFactory ? "selected" : ""}>${esc(t.desc)} (${esc(t.local)})</option>`).join("")}
-              </select>
-            </label>
-            <label class="sj-field sj-field-sm">
-              <span>Hệ số nhiên liệu</span>
-              <input id="sjFuelFactor" type="number" step="0.05" min="0.5" max="3" value="${esc(sjState.fuelFactor)}">
-            </label>
-            <div class="sj-vat-box">
-              <label class="check-inline">
-                <input id="sjVatOn" type="checkbox" ${sjState.vatOn ? "checked" : ""}>
-                <span>VAT</span>
-              </label>
-              <input id="sjVatRate" type="number" min="0" max="100" step="0.5" value="${esc(sjState.vatRate)}">
-              <span>%</span>
-            </div>
-          </div>
-
           <div id="sjTariffDrawer" class="sj-tariff-drawer" hidden></div>
           <div id="sjKpis" class="sj-kpis"></div>
         </div>
 
-        <!-- Trip / Combine Editor Card -->
+        <!-- Khối 1: Thêm chuyến phát sinh -->
         <div class="sj-editor-card">
           <div class="sj-editor-head">
             <div class="sj-editor-title">
-              <strong id="sjFormModeTitle">Thêm chuyến phát sinh mới</strong>
+              <strong id="sjFormModeTitle">Thêm chuyến phát sinh</strong>
               <span id="sjModeBadge" class="sj-pill">Mới</span>
+              <span id="sjDetectHint" class="sj-detect-hint"></span>
             </div>
-            <div class="sj-editor-actions">
-              <button type="button" class="btn btn-sm btn-ghost" id="sjResetForm">Làm mới form</button>
-            </div>
+            <button type="button" class="btn btn-sm btn-ghost" id="sjResetForm">Làm mới form</button>
           </div>
 
-          <div class="sj-form-grid">
+          <div class="sj-form-grid-v2">
             <label class="sj-field">
-              <span>Ngày (Date · Merge)</span>
-              <input id="sjDate" type="text" placeholder="VD: 05.NOV hoặc 05/11/2026">
+              <span>Ngày</span>
+              <input id="sjDate" type="text" placeholder="VD: 23.OCT hoặc 23/10">
             </label>
             <label class="sj-field">
-              <span>Loại xe / Cont (Merge)</span>
+              <span>Type of Truck (Loại xe / Cont)</span>
               <select id="sjTruckCode">
                 <optgroup label="Hàng lẻ (LCL · Free 2h)">
                   ${VEHICLE_OPTIONS.filter((v) => !v.isFcl)
@@ -939,142 +1045,150 @@
               </select>
             </label>
             <label class="sj-field">
-              <span>Cont No. (Merge)</span>
-              <input id="sjContNo" type="text" placeholder="VD: HMMU6837801 (nếu FCL)">
+              <span>Booking Ref (SE · cách nhau dấu cách)</span>
+              <textarea id="sjBookingRefs" rows="1" class="sj-multi" placeholder="VD: SE1809260288"></textarea>
             </label>
             <label class="sj-field">
-              <span>Tariff Nhà máy</span>
-              <select id="sjTripFactory">
-                ${VN_TARIFF.map((t) => `<option value="${esc(t.key)}">${esc(t.desc)}</option>`).join("")}
-              </select>
+              <span>Shipment (cách nhau dấu cách)</span>
+              <textarea id="sjShipments" rows="1" class="sj-multi" placeholder="VD: S02315494"></textarea>
+            </label>
+
+            <label class="sj-field sj-span-2">
+              <span>Số Booking (dán nhiều mã cách nhau dấu cách/xuống dòng để tự Combine)</span>
+              <textarea id="sjBookings" rows="2" class="sj-multi" placeholder="VD: WAL076N05527HN0 WAL076N05528HN0 WAL076N05529HN0"></textarea>
             </label>
             <label class="sj-field">
-              <span>Giờ vào (In · Merge)</span>
-              <input id="sjInTime" type="text" placeholder="08:19">
+              <span>Số Cont (1 số = Merge · nhiều số = tách dòng)</span>
+              <textarea id="sjConts" rows="2" class="sj-multi" placeholder="VD: FSCU5960847 (hoặc 3 cont cách dấu cách)"></textarea>
             </label>
             <label class="sj-field">
-              <span>Giờ ra (Out · Merge)</span>
-              <input id="sjOutTime" type="text" placeholder="16:40">
+              <span>Volume (cách nhau dấu cách · lớn nhất in đậm)</span>
+              <textarea id="sjVolumes" rows="2" class="sj-multi" placeholder="VD: 5.571 4.414 3.664 (hoặc 40HC)"></textarea>
+            </label>
+
+            <label class="sj-field">
+              <span>Giờ vào (In · 1 hoặc nhiều cách dấu cách)</span>
+              <input id="sjInTimes" type="text" placeholder="VD: 08:19">
             </label>
             <label class="sj-field">
-              <span>Hoá đơn Misa (Merge)</span>
-              <input id="sjMisa" type="text" placeholder="VD: 3579">
+              <span>Giờ ra (Out · 1 hoặc nhiều cách dấu cách)</span>
+              <input id="sjOutTimes" type="text" placeholder="VD: 16:40">
             </label>
-            <div class="sj-check-col">
-              <label class="check-inline" title="Bật nếu xe ra sang ngày hôm sau">
+            <div class="sj-check-row sj-span-2">
+              <label class="check-inline">
                 <input id="sjNextDay" type="checkbox">
-                <span>Qua ngày sau</span>
+                <span>Ra ngày hôm sau</span>
               </label>
-              <label class="check-inline" title="Tự trừ 1 tiếng nghỉ trưa 12:00–13:00 nếu thời gian đóng hàng vắt qua giờ trưa">
+              <label class="check-inline">
                 <input id="sjDeductLunch" type="checkbox" checked>
-                <span>Trừ trưa 12h–13h</span>
+                <span>Trừ nghỉ trưa (12h–13h)</span>
               </label>
-            </div>
-          </div>
-
-          <!-- Bookings sub-table (NOT merged) -->
-          <div class="sj-bk-section">
-            <div class="sj-bk-head">
-              <div>
-                <strong>Danh sách Booking đi chung xe / Cont này</strong>
-                <span class="sj-hint">Nếu có nhiều Booking (combine), chỉ giữ 1 chuyến — các cột ngày, xe, giờ và tiền sẽ tự động gộp ô (merge) và chỉ tính phí 1 lần.</span>
-              </div>
-              <div class="sj-bk-btns">
-                <button type="button" class="btn btn-sm btn-ghost" id="sjTogglePaste">📋 Dán nhiều dòng từ Excel</button>
-                <button type="button" class="btn btn-sm" id="sjAddBookingRow">+ Thêm Booking</button>
-              </div>
-            </div>
-
-            <div id="sjPasteBox" class="sj-paste-box" hidden>
-              <textarea id="sjPasteInput" rows="3" placeholder="Dán các dòng copy từ Excel vào đây (hỗ trợ: Booking Ref | Shipment | Booking | Volume, hoặc Booking | Volume)..."></textarea>
-              <div class="sj-paste-actions">
-                <button type="button" class="btn btn-sm btn-primary" id="sjApplyPaste">Tách & Thêm vào danh sách</button>
-                <button type="button" class="btn btn-sm btn-ghost" id="sjCancelPaste">Đóng</button>
-              </div>
-            </div>
-
-            <div class="sj-bk-table-wrap">
-              <table class="sj-bk-table">
-                <thead>
-                  <tr>
-                    <th style="width:38px">#</th>
-                    <th>Booking Ref (SE · Không merge)</th>
-                    <th>Shipment (Không merge)</th>
-                    <th>Booking (Không merge)</th>
-                    <th>Volume / Size</th>
-                    <th style="width:42px"></th>
-                  </tr>
-                </thead>
-                <tbody id="sjBkRows"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Calculation & Surcharges -->
-          <div class="sj-calc-section">
-            <div class="sj-calc-banner">
-              <span id="sjCalcExplain">Nhập giờ In/Out hoặc chọn phụ phí để hệ thống tự tính theo Tariff VND.</span>
-              <button type="button" class="link-btn" id="sjRecalcAuto">Áp lại công thức tự động</button>
-            </div>
-
-            <div class="sj-charges-grid">
-              <label class="sj-field">
-                <span>Số Truck thêm (4h/truck)</span>
-                <input id="sjExtraTrucks" type="number" min="0" step="1" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Huỷ xe (Cancel truck)</span>
-                <input id="sjCancelCount" type="number" min="0" step="1" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Số giờ chờ</span>
-                <input id="sjWaitHours" type="number" min="0" step="0.5" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Lưu ca / Overnight (đêm)</span>
-                <input id="sjOvernightCount" type="number" min="0" step="1" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Gửi vỏ (ngày · 1.8tr/ngày)</span>
-                <input id="sjShellDays" type="number" min="0" step="1" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Phí Cao tốc (VND)</span>
-                <input id="sjTollFee" type="number" min="0" step="1000" value="0">
-              </label>
-              <label class="sj-field">
-                <span>Khác / Nâng hạ Cont (VND)</span>
-                <input id="sjOtherFee" type="number" min="0" step="1000" value="0">
-              </label>
-              <div class="sj-tenda-box">
-                <label class="check-inline">
-                  <input id="sjTendaOn" type="checkbox" checked>
-                  <span><strong>Tenda</strong> (+1,000,000 đ)</span>
-                </label>
-              </div>
-            </div>
-
-            <div class="sj-note-row">
-              <label class="sj-field sj-note-field">
-                <span>NOTE hiển thị trên bảng kê</span>
-                <input id="sjNote" type="text" placeholder="Tự động tạo theo chi tiết phát sinh...">
-              </label>
-              <div class="sj-draft-total">
-                <small>Tổng chuyến này (chưa VAT)</small>
-                <strong id="sjDraftTotal">0 đ</strong>
-              </div>
-              <div class="sj-submit-wrap">
-                <button type="button" class="btn btn-primary" id="sjSaveTripBtn">+ Thêm vào bảng kê</button>
-              </div>
             </div>
           </div>
         </div>
 
-        <!-- Preview & Export Card -->
+        <!-- Khối 2: Chi phí phát sinh -->
+        <div class="sj-editor-card">
+          <div class="sj-editor-head">
+            <div class="sj-editor-title">
+              <strong>Chi phí phát sinh</strong>
+              <span id="sjCalcExplain" class="sj-calc-summary"></span>
+            </div>
+            <button type="button" class="link-btn" id="sjRecalcAuto">Tính lại theo giờ</button>
+          </div>
+
+          <div class="sj-fees-grid">
+            <div class="sj-fee-item">
+              <label class="sj-field">
+                <span>Phát sinh chuyến (4h = 1 Truck)</span>
+                <input id="sjExtraTrucks" type="number" min="0" max="10" step="1" value="0">
+              </label>
+              <small id="sjExtraTruckAmt" class="sj-fee-amt">0 đ</small>
+            </div>
+
+            <div class="sj-fee-item">
+              <label class="sj-field">
+                <span>Huỷ Xe (1 – 5 Truck)</span>
+                <select id="sjCancelCount">
+                  <option value="0">Không</option>
+                  <option value="1">1 Truck</option>
+                  <option value="2">2 Truck</option>
+                  <option value="3">3 Truck</option>
+                  <option value="4">4 Truck</option>
+                  <option value="5">5 Truck</option>
+                </select>
+              </label>
+              <small id="sjCancelAmt" class="sj-fee-amt">0 đ</small>
+            </div>
+
+            <div class="sj-fee-item">
+              <label class="sj-field">
+                <span>Giờ chờ (tự tính từ In/Out)</span>
+                <input id="sjWaitHours" type="number" min="0" step="0.5" value="0">
+              </label>
+              <small id="sjWaitAmt" class="sj-fee-amt">0 đ</small>
+            </div>
+
+            <div class="sj-fee-item">
+              <label class="sj-field">
+                <span>Lưu ca / Overnight (đêm)</span>
+                <input id="sjOvernightCount" type="number" min="0" max="10" step="1" value="0">
+              </label>
+              <small id="sjOvernightAmt" class="sj-fee-amt">0 đ</small>
+            </div>
+
+            <div class="sj-fee-item sj-shell-range">
+              <div class="sj-field">
+                <span>Gửi vỏ (Từ ngày → Đến ngày)</span>
+                <div class="sj-date-pair">
+                  <input id="sjShellFrom" type="date" aria-label="Gửi vỏ từ ngày">
+                  <span>→</span>
+                  <input id="sjShellTo" type="date" aria-label="Gửi vỏ đến ngày">
+                </div>
+              </div>
+              <small id="sjShellAmt" class="sj-fee-amt">0 ngày · 0 đ</small>
+            </div>
+
+            <div class="sj-fee-item">
+              <div class="sj-field">
+                <span>Tenda</span>
+                <label class="sj-tenda-toggle">
+                  <input id="sjTendaOn" type="checkbox" checked>
+                  <span>Áp dụng Tenda</span>
+                </label>
+              </div>
+              <small id="sjTendaAmt" class="sj-fee-amt">1,000,000 đ</small>
+            </div>
+
+            <div class="sj-fee-item">
+              <label class="sj-field">
+                <span>Cao tốc (VND)</span>
+                <input id="sjTollFee" type="number" min="0" step="1000" value="0">
+              </label>
+              <small id="sjTollAmt" class="sj-fee-amt">0 đ</small>
+            </div>
+          </div>
+
+          <div class="sj-note-row">
+            <label class="sj-field sj-note-field">
+              <span>NOTE (tự động tổng hợp · không trùng giờ vào/ra)</span>
+              <input id="sjNote" type="text" placeholder="VD: Tenda + 2 Giờ chờ + 217K Cao tốc">
+            </label>
+            <div class="sj-draft-total">
+              <small>Tổng chuyến (chưa VAT)</small>
+              <strong id="sjDraftTotal">0 đ</strong>
+            </div>
+            <div class="sj-submit-wrap">
+              <button type="button" class="btn btn-primary" id="sjSaveTripBtn">+ Thêm vào bảng kê</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Khối 3: Bảng kê & Xuất Excel -->
         <div class="sj-preview-card">
           <div class="sj-preview-bar">
             <div class="sj-search-box">
-              <input id="sjSearch" type="search" placeholder="Lọc theo Booking, SE, Shipment, Cont, Ngày..." value="${esc(searchQuery)}">
+              <input id="sjSearch" type="search" placeholder="Tìm Booking, SE, Shipment, Cont, Ngày..." value="${esc(searchQuery)}">
             </div>
             <div class="sj-export-btns">
               <button type="button" class="btn btn-primary" id="sjPrintBtn">In / Lưu PDF</button>
@@ -1093,61 +1207,39 @@
     el.hidden = !showTariffDrawer;
     if (!showTariffDrawer) return;
     const t = getTariff(sjState.defaultFactory);
-    const fuel = Number(sjState.fuelFactor) || 1.25;
     el.innerHTML = `
       <div class="sj-tariff-title">
-        <strong>Đơn giá Tariff đang chọn: ${esc(t.desc)}</strong>
-        <span>(VND gốc trên Tariff · Giá 1 Truck = VND × ${fuel} · Overnight = VND × ${fuel} × 0.8)</span>
+        <strong>Bảng giá Tariff mặc định:</strong>
+        <select id="sjDefaultFactory" class="sj-tariff-select">
+          ${VN_TARIFF.map((x) => `<option value="${esc(x.key)}" ${x.key === sjState.defaultFactory ? "selected" : ""}>${esc(x.desc)} (${esc(x.local)})</option>`).join("")}
+        </select>
+        <span>1 Truck = VND × ${FUEL_FACTOR} · Overnight = VND × ${FUEL_FACTOR} × 0.8</span>
       </div>
       <div class="sj-tariff-scroll">
         <table class="sj-tariff-mini">
           <thead>
-            <tr>
-              <th>Mục</th>
-              ${TRUCK_COLS.map((c) => `<th>${esc(c)}</th>`).join("")}
-            </tr>
+            <tr><th>Mục</th>${TRUCK_COLS.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>
           </thead>
           <tbody>
-            <tr>
-              <td><b>VND gốc</b></td>
-              ${t.vnd.map((v) => `<td>${v ? fmt(v) : "—"}</td>`).join("")}
-            </tr>
-            <tr>
-              <td><b>1 Truck (×${fuel})</b></td>
-              ${t.vnd.map((v) => `<td>${v ? fmt(round3(v * fuel)) : "—"}</td>`).join("")}
-            </tr>
-            <tr>
-              <td><b>Overnight (×0.8)</b></td>
-              ${t.vnd.map((v) => `<td>${v ? fmt(round3(v * fuel * 0.8)) : "—"}</td>`).join("")}
-            </tr>
+            <tr><td><b>VND gốc</b></td>${t.vnd.map((v) => `<td>${v ? fmt(v) : "—"}</td>`).join("")}</tr>
+            <tr><td><b>1 Truck (×1.25)</b></td>${t.vnd.map((v) => `<td>${v ? fmt(round3(v * FUEL_FACTOR)) : "—"}</td>`).join("")}</tr>
+            <tr><td><b>Overnight (×0.8)</b></td>${t.vnd.map((v) => `<td>${v ? fmt(round3(v * FUEL_FACTOR * 0.8)) : "—"}</td>`).join("")}</tr>
           </tbody>
         </table>
       </div>
     `;
+    on("#sjDefaultFactory", "change", (e) => {
+      sjState.defaultFactory = e.target.value;
+      if (!editingTripId && draft) draft.factoryKey = sjState.defaultFactory;
+      saveState();
+      renderTariffDrawer();
+      updateDraftAmountsUi();
+      renderSunjune();
+    });
   }
 
-  function renderBookingRows() {
-    const tbody = $("#sjBkRows");
-    if (!tbody || !draftTrip) return;
-    tbody.innerHTML = draftTrip.bookings
-      .map(
-        (bk, idx) => `
-      <tr data-bk-idx="${idx}">
-        <td class="c">${idx + 1}</td>
-        <td><input type="text" class="sj-bk-inp" data-bk-field="ref" value="${esc(bk.ref)}" placeholder="VD: SE1809260288"></td>
-        <td><input type="text" class="sj-bk-inp" data-bk-field="shipment" value="${esc(bk.shipment)}" placeholder="VD: S02315494"></td>
-        <td><input type="text" class="sj-bk-inp" data-bk-field="booking" value="${esc(bk.booking)}" placeholder="VD: BY388653"></td>
-        <td><input type="text" class="sj-bk-inp" data-bk-field="volume" value="${esc(bk.volume)}" placeholder="${
-          getVehicle(draftTrip.truckCode).isFcl ? getVehicle(draftTrip.truckCode).defaultVol : "CBM (VD: 4.71)"
-        }"></td>
-        <td class="c"><button type="button" class="sj-bk-del" data-bk-del="${idx}" title="Xoá dòng">×</button></td>
-      </tr>`
-      )
-      .join("");
-  }
-
-  function syncDraftInputsToForm() {
-    if (!draftTrip) return;
+  function syncDraftToForm() {
+    if (!draft) return;
     const setVal = (sel, v) => {
       const el = $(sel);
       if (el && document.activeElement !== el) el.value = v;
@@ -1156,121 +1248,144 @@
       const el = $(sel);
       if (el) el.checked = !!v;
     };
-    setVal("#sjDate", draftTrip.date || "");
-    setVal("#sjTruckCode", draftTrip.truckCode || "8T");
-    setVal("#sjContNo", draftTrip.contNo || "");
-    setVal("#sjTripFactory", draftTrip.factoryKey || sjState.defaultFactory);
-    setVal("#sjInTime", draftTrip.inTime || "");
-    setVal("#sjOutTime", draftTrip.outTime || "");
-    setVal("#sjMisa", draftTrip.misaInvoice || "");
-    setChk("#sjNextDay", draftTrip.nextDay);
-    setChk("#sjDeductLunch", draftTrip.deductLunch);
-    setVal("#sjExtraTrucks", draftTrip.extraTrucks ?? 0);
-    setVal("#sjCancelCount", draftTrip.cancelCount ?? 0);
-    setVal("#sjWaitHours", draftTrip.waitHours ?? 0);
-    setVal("#sjOvernightCount", draftTrip.overnightCount ?? 0);
-    setVal("#sjShellDays", draftTrip.shellDays ?? 0);
-    setVal("#sjTollFee", draftTrip.tollFee ?? 0);
-    setVal("#sjOtherFee", draftTrip.otherFee ?? 0);
-    setChk("#sjTendaOn", draftTrip.tendaOn);
-    setVal("#sjNote", draftTrip.note || "");
+    setVal("#sjDate", draft.date || "");
+    setVal("#sjTruckCode", draft.truckCode || "8T");
+    setVal("#sjBookingRefs", draft.bookingRefsText || "");
+    setVal("#sjShipments", draft.shipmentsText || "");
+    setVal("#sjBookings", draft.bookingsText || "");
+    setVal("#sjConts", draft.contsText || "");
+    setVal("#sjVolumes", draft.volumesText || "");
+    setVal("#sjInTimes", draft.inTimesText || "");
+    setVal("#sjOutTimes", draft.outTimesText || "");
+    setChk("#sjNextDay", draft.nextDay);
+    setChk("#sjDeductLunch", draft.deductLunch);
+
+    setVal("#sjExtraTrucks", draft.extraTrucks ?? 0);
+    setVal("#sjCancelCount", String(draft.cancelCount ?? 0));
+    setVal("#sjWaitHours", draft.waitHours ?? 0);
+    setVal("#sjOvernightCount", draft.overnightCount ?? 0);
+    setVal("#sjShellFrom", draft.shellFrom || "");
+    setVal("#sjShellTo", draft.shellTo || "");
+    setChk("#sjTendaOn", draft.tendaOn);
+    setVal("#sjTollFee", draft.tollFee ?? 0);
+    setVal("#sjNote", draft.note || "");
 
     const modeTitle = $("#sjFormModeTitle");
     const modeBadge = $("#sjModeBadge");
     const saveBtn = $("#sjSaveTripBtn");
     if (editingTripId) {
-      if (modeTitle) modeTitle.textContent = "Đang sửa chuyến phát sinh";
+      if (modeTitle) modeTitle.textContent = "Sửa chuyến phát sinh";
       if (modeBadge) {
         modeBadge.textContent = "Đang sửa";
         modeBadge.className = "sj-pill edit";
       }
       if (saveBtn) saveBtn.textContent = "Lưu thay đổi";
     } else {
-      if (modeTitle) modeTitle.textContent = "Thêm chuyến phát sinh mới";
+      if (modeTitle) modeTitle.textContent = "Thêm chuyến phát sinh";
       if (modeBadge) {
         modeBadge.textContent = "Mới";
         modeBadge.className = "sj-pill";
       }
       if (saveBtn) saveBtn.textContent = "+ Thêm vào bảng kê";
     }
-
-    renderBookingRows();
-    updateDraftCalcPreview();
+    updateDraftAmountsUi();
   }
 
-  function applyAutoCalcToDraft(forceAll = false) {
-    if (!draftTrip) return;
-    const timing = computeAutoTiming(draftTrip);
-    if (timing.hasTime) {
-      if (forceAll || !manualLocked.extraTrucks) draftTrip.extraTrucks = timing.extraTrucks;
-      if (forceAll || !manualLocked.waitHours) draftTrip.waitHours = timing.waitHours;
-      if (forceAll || !manualLocked.overnightCount) draftTrip.overnightCount = timing.overnightCount;
-    } else if (forceAll) {
-      draftTrip.extraTrucks = 0;
-      draftTrip.waitHours = 0;
-      draftTrip.overnightCount = 0;
+  function applyAutoFromTime(forceAll = false) {
+    if (!draft) return;
+    const expanded = expandDraftRows(draft);
+    if (!expanded.splitCosts) {
+      const timing = computeTimingForPair(expanded.rows[0].inTime, expanded.rows[0].outTime, draft.truckCode, draft.deductLunch, draft.nextDay);
+      if (timing.hasTime) {
+        if (forceAll || !manualLocks.extraTrucks) draft.extraTrucks = timing.extraTrucks;
+        if (forceAll || !manualLocks.waitHours) draft.waitHours = timing.waitHours;
+        if (forceAll || !manualLocks.overnightCount) draft.overnightCount = timing.overnightCount;
+      } else if (forceAll) {
+        draft.extraTrucks = 0;
+        draft.waitHours = 0;
+        draft.overnightCount = 0;
+      }
     }
-    if (forceAll || !manualLocked.note) {
-      const c = calcTripMoney(draftTrip);
-      draftTrip.note = buildAutoNote(draftTrip, c);
+    if (forceAll || !manualLocks.note) {
+      draft.note = buildAutoNote(draft);
     }
-    syncDraftInputsToForm();
+    syncDraftToForm();
   }
 
-  function updateDraftCalcPreview() {
-    if (!draftTrip) return;
-    const calc = calcTripMoney(draftTrip);
+  function updateDraftAmountsUi() {
+    if (!draft) return;
+    const detail = calcTripDetails(draft);
+    const { expanded, veh, truckUnit, overnightUnit, lineCalcs, tripTotal } = detail;
+
+    const hintEl = $("#sjDetectHint");
+    if (hintEl) {
+      if (expanded.rowCount > 1 && !expanded.splitCosts) {
+        hintEl.textContent = `Combine ${expanded.rowCount} Booking · Tính phí 1 lần`;
+      } else if (expanded.splitCosts) {
+        hintEl.textContent = `${expanded.rowCount} dòng riêng (${expanded.mergeCont ? "chung Cont" : "tách Cont / tách giờ"})`;
+      } else {
+        hintEl.textContent = "";
+      }
+    }
+
     const explainEl = $("#sjCalcExplain");
-    const totalEl = $("#sjDraftTotal");
-
     if (explainEl) {
+      const firstTiming = lineCalcs[0].timing;
       const parts = [
-        `Tariff <b>${esc(calc.tariff.local)}</b> · ${esc(calc.veh.truckCell)}${calc.veh.isFcl ? ` (${esc(calc.veh.defaultVol)})` : ""}`,
-        `1 Truck = <b>${fmt(calc.truckUnit)} đ</b>`,
-        `Giờ chờ = <b>${fmt(calc.veh.waitRate)} đ/h</b>`,
+        `${veh.truckCell}: <b>${fmt(truckUnit)} đ/truck</b>`,
+        `Chờ: <b>${fmt(veh.waitRate)} đ/h</b>`,
+        `Overnight: <b>${fmt(overnightUnit)} đ/đêm</b>`,
       ];
-      if (calc.timing.hasTime) {
+      if (!expanded.splitCosts && firstTiming.hasTime) {
         parts.push(
-          `Đóng hàng: <b>${fmtHmShort(calc.timing.rawMins)}</b>${
-            calc.timing.lunchMins ? ` (trừ trưa -${calc.timing.lunchMins}')` : ""
-          } · Free ${calc.timing.freeMins / 60}h → Gợi ý: <b>${calc.timing.extraTrucks} Truck + ${calc.timing.waitHours}h chờ${
-            calc.timing.overnightCount ? ` + ${calc.timing.overnightCount} Overnight` : ""
-          }</b>`
+          `Đóng hàng: <b>${fmtHmShort(firstTiming.rawMins)}</b>${
+            firstTiming.lunchMins ? ` (trừ trưa -${firstTiming.lunchMins}')` : ""
+          } · Free ${firstTiming.freeMins / 60}h`
         );
       }
       explainEl.innerHTML = parts.join(" · ");
     }
-    if (totalEl) {
-      totalEl.textContent = `${fmt(calc.totalFee)} đ`;
+
+    const sumTruck = round3(lineCalcs.reduce((s, c) => s + c.extraTrucks * truckUnit, 0));
+    const sumCancel = round3(lineCalcs.reduce((s, c) => s + c.cancelCount * truckUnit, 0));
+    const sumWait = round3(lineCalcs.reduce((s, c) => s + c.waitFee, 0));
+    const sumOvn = round3(lineCalcs.reduce((s, c) => s + c.overnightFee, 0));
+    const sumShell = round3(lineCalcs.reduce((s, c) => s + c.shellFee, 0));
+    const sumTenda = round3(lineCalcs.reduce((s, c) => s + c.tendaFee, 0));
+    const sumToll = round3(lineCalcs.reduce((s, c) => s + c.tollFee, 0));
+
+    if ($("#sjExtraTruckAmt")) $("#sjExtraTruckAmt").textContent = `${fmt(sumTruck)} đ`;
+    if ($("#sjCancelAmt")) $("#sjCancelAmt").textContent = `${fmt(sumCancel)} đ`;
+    if ($("#sjWaitAmt")) $("#sjWaitAmt").textContent = `${fmt(sumWait)} đ`;
+    if ($("#sjOvernightAmt")) $("#sjOvernightAmt").textContent = `${fmt(sumOvn)} đ`;
+    if ($("#sjShellAmt")) {
+      const days = lineCalcs[0].shellDays || 0;
+      $("#sjShellAmt").textContent = `${days} ngày · ${fmt(sumShell)} đ`;
     }
+    if ($("#sjTendaAmt")) $("#sjTendaAmt").textContent = `${fmt(sumTenda)} đ`;
+    if ($("#sjTollAmt")) $("#sjTollAmt").textContent = `${fmt(sumToll)} đ`;
+    if ($("#sjDraftTotal")) $("#sjDraftTotal").textContent = `${fmt(tripTotal)} đ`;
   }
 
   function filteredTrips() {
     if (!searchQuery.trim()) return sjState.trips;
     const q = norm(searchQuery);
-    return sjState.trips.filter((t) => {
-      const haystack = [
-        t.date,
-        t.contNo,
-        t.truckCode,
-        t.misaInvoice,
-        t.note,
-        ...(t.bookings || []).flatMap((b) => [b.ref, b.shipment, b.booking, b.volume]),
-      ]
+    return sjState.trips.filter((t) =>
+      [t.date, t.bookingRefsText, t.shipmentsText, t.bookingsText, t.contsText, t.truckCode, t.note, t.misaInvoice]
         .map(norm)
-        .join(" ");
-      return haystack.includes(q);
-    });
+        .join(" ")
+        .includes(q)
+    );
   }
 
   function renderSunjune() {
     if (!$("#vSunjune")) return;
-    const allSum = calcSummary(sjState.trips);
+    const allSum = calcStatementSummary(sjState.trips);
     const kpiEl = $("#sjKpis");
     if (kpiEl) {
       kpiEl.innerHTML = [
-        ["Số chuyến / Cont", sjState.trips.length, ""],
-        ["Tổng số Booking", allSum.totalBookings, "kpi-ok"],
+        ["Số chuyến", sjState.trips.length, ""],
+        ["Số Booking", allSum.totalBookings, "kpi-ok"],
         ["Tổng trước thuế", `${fmt(allSum.subtotal)} đ`, ""],
         ["Tổng sau thuế (VAT)", `${fmt(allSum.grandTotal)} đ`, "kpi-ok"],
       ]
@@ -1278,159 +1393,145 @@
         .join("");
     }
     renderTariffDrawer();
-    const list = filteredTrips();
-    const prevEl = $("#sjPreview");
-    if (prevEl) prevEl.innerHTML = buildStatementHtml(list, false);
+    if ($("#sjPreview")) $("#sjPreview").innerHTML = buildStatementHtml(filteredTrips(), false);
   }
 
-  function saveDraftTripToList() {
-    if (!draftTrip) return;
-    const validBookings = (draftTrip.bookings || []).filter(
-      (b) => b.ref.trim() || b.shipment.trim() || b.booking.trim() || b.volume.trim()
-    );
-    if (!validBookings.length) {
-      toast("Vui lòng nhập ít nhất 1 Booking hoặc Số Shipment / Booking Ref.");
+  function saveDraftTrip() {
+    if (!draft) return;
+    const hasAnyId =
+      splitTokens(draft.bookingsText).length ||
+      splitTokens(draft.bookingRefsText).length ||
+      splitTokens(draft.shipmentsText).length ||
+      splitTokens(draft.contsText).length;
+    if (!hasAnyId) {
+      toast("Vui lòng nhập ít nhất Số Booking, Booking Ref hoặc Shipment.");
       return;
     }
-
-    const tripCopy = JSON.parse(JSON.stringify(draftTrip));
-    tripCopy.bookings = validBookings;
-    if (tripCopy.inTime) tripCopy.inTime = fmtTimeStr(tripCopy.inTime);
-    if (tripCopy.outTime) tripCopy.outTime = fmtTimeStr(tripCopy.outTime);
+    const copy = JSON.parse(JSON.stringify(draft));
+    copy.date = normalizeDateLabel(copy.date);
 
     if (editingTripId) {
       const idx = sjState.trips.findIndex((t) => t.id === editingTripId);
-      if (idx >= 0) sjState.trips[idx] = tripCopy;
-      else sjState.trips.push(tripCopy);
+      if (idx >= 0) sjState.trips[idx] = copy;
+      else sjState.trips.push(copy);
       toast("Đã cập nhật chuyến phát sinh.");
     } else {
-      sjState.trips.push(tripCopy);
-      toast(`Đã thêm chuyến (${validBookings.length} booking) vào bảng kê.`);
+      sjState.trips.push(copy);
+      toast("Đã thêm chuyến vào bảng kê.");
     }
 
+    const keepDate = copy.date;
     editingTripId = null;
-    manualLocked = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
-    const keepDate = draftTrip.date;
-    const keepFactory = draftTrip.factoryKey;
-    draftTrip = createEmptyDraft();
-    draftTrip.date = keepDate || draftTrip.date;
-    draftTrip.factoryKey = keepFactory || sjState.defaultFactory;
+    manualLocks = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
+    draft = createEmptyDraft();
+    draft.date = keepDate || draft.date;
     saveState();
-    syncDraftInputsToForm();
+    syncDraftToForm();
     renderSunjune();
   }
 
   function loadSampleTrips() {
-    if (sjState.trips.length && !window.confirm("Bảng kê đang có dữ liệu. Bạn muốn thêm các chuyến ví dụ mẫu vào cuối bảng kê?")) {
+    if (sjState.trips.length && !window.confirm("Bảng kê đang có dữ liệu. Thêm các chuyến ví dụ mẫu vào bảng kê?")) {
       return;
     }
     const samples = [
       {
-        id: "sj_demo_1",
+        id: "sj_s1",
         date: "02.NOV",
-        contNo: "",
+        bookingRefsText: "SE1410260549",
+        shipmentsText: "S02319432",
+        bookingsText: "WAL076N05527HN0 WAL076N05528HN0 WAL076N05529HN0",
+        contsText: "",
         truckCode: "8T",
-        factoryKey: "sunjune",
-        inTime: "08:00:00",
-        outTime: "11:05:00",
+        volumesText: "5.571 4.414 3.664",
+        inTimesText: "08:00",
+        outTimesText: "11:05",
         nextDay: false,
         deductLunch: true,
+        factoryKey: "sunjune",
         extraTrucks: 0,
         cancelCount: 0,
         waitHours: 1,
         overnightCount: 0,
+        shellFrom: "",
+        shellTo: "",
         shellDays: 0,
         tendaOn: true,
         tollFee: 0,
-        otherFee: 0,
-        misaInvoice: "3610",
-        note: "PICKUP TENDA + (xe vào 08:00, ra 11:05, tổng 3h05') / Charge 1 Giờ chờ",
-        bookings: [
-          { ref: "SE1410260549", shipment: "S02319432", booking: "WAL076N05527HN0", volume: "5.57" },
-          { ref: "SE1410260550", shipment: "S02319432", booking: "WAL076N05528HN0", volume: "4.41" },
-          { ref: "SE1410260551", shipment: "S02319432", booking: "WAL076N05529HN0", volume: "3.66" },
-        ],
+        note: "Tenda + 1 Giờ chờ",
+        misaInvoice: "",
+        misaAmount: "",
+        lineMisa: [],
       },
       {
-        id: "sj_demo_2",
+        id: "sj_s2",
         date: "05.NOV",
-        contNo: "HMMU6837801",
+        bookingRefsText: "SE3110260140",
+        shipmentsText: "S02326736",
+        bookingsText: "HANM83299800",
+        contsText: "HMMU6837801",
         truckCode: "FCL-40DC",
-        factoryKey: "sunjune",
-        inTime: "08:19:00",
-        outTime: "16:40:00",
+        volumesText: "40DC",
+        inTimesText: "08:19",
+        outTimesText: "16:40",
         nextDay: false,
         deductLunch: true,
+        factoryKey: "sunjune",
         extraTrucks: 0,
         cancelCount: 0,
         waitHours: 3,
         overnightCount: 0,
+        shellFrom: "",
+        shellTo: "",
         shellDays: 0,
         tendaOn: true,
         tollFee: 0,
-        otherFee: 0,
-        misaInvoice: "3611",
-        note: "PICKUP TENDA + (xe vào 08:19, ra 16:40, tổng 8h21') / Charge 3 Giờ chờ",
-        bookings: [{ ref: "SE3110260140", shipment: "S02326736", booking: "HANM83299800", volume: "40DC" }],
+        note: "Tenda + 3 Giờ chờ",
+        misaInvoice: "",
+        misaAmount: "",
+        lineMisa: [],
       },
       {
-        id: "sj_demo_3",
-        date: "02.OCT",
-        contNo: "TLLU1114663",
+        id: "sj_s3",
+        date: "05.NOV",
+        bookingRefsText: "SE0309260099",
+        shipmentsText: "S02304563",
+        bookingsText: "HANGG4684500",
+        contsText: "TLLU1114663",
         truckCode: "FCL-40HCNOR",
-        factoryKey: "sunjune",
-        inTime: "",
-        outTime: "",
+        volumesText: "40HCNOR",
+        inTimesText: "",
+        outTimesText: "",
         nextDay: false,
         deductLunch: true,
-        extraTrucks: 1,
-        cancelCount: 0,
+        factoryKey: "sunjune",
+        extraTrucks: 0,
+        cancelCount: 1,
         waitHours: 0,
         overnightCount: 2,
-        shellDays: 0,
+        shellFrom: "2026-10-15",
+        shellTo: "2026-10-17",
+        shellDays: 3,
         tendaOn: true,
-        tollFee: 0,
-        otherFee: 0,
-        misaInvoice: "3658",
-        note: "PICKUP TENDA + Charge 1 Truck + 2 Overnight",
-        bookings: [{ ref: "SE0309260099", shipment: "S02304563", booking: "HANGG4684500", volume: "40HCNOR" }],
+        tollFee: 217000,
+        note: "Tenda + Cancel + 2 Over Night + Gửi vỏ 3 ngày (ngày 15, 16, 17/10) + 217K Cao tốc",
+        misaInvoice: "",
+        misaAmount: "",
+        lineMisa: [],
       },
     ];
     sjState.trips.push(...samples);
-    if (!sjState.period) sjState.period = "02.10 - 05.11.26";
-    if ($("#sjPeriod")) $("#sjPeriod").value = sjState.period;
     saveState();
     renderSunjune();
-    toast("Đã nạp 3 chuyến ví dụ mẫu (gồm cả hàng lẻ combine & FCL).");
+    toast("Đã nạp 3 chuyến ví dụ mẫu (có combine & dòng Ngày nằm ngang).");
   }
 
   function bindEvents() {
     on("#sjTitle", "input", (e) => {
       sjState.title = e.target.value;
       saveState();
-      renderSunjune();
-    });
-    on("#sjPeriod", "input", (e) => {
-      sjState.period = e.target.value;
-      saveState();
-      const pr = $("#sjPreview .sh-r i");
-      if (pr) pr.textContent = sjState.period || "—";
-    });
-    on("#sjDefaultFactory", "change", (e) => {
-      sjState.defaultFactory = e.target.value;
-      if (!editingTripId && draftTrip) {
-        draftTrip.factoryKey = sjState.defaultFactory;
-        syncDraftInputsToForm();
-      }
-      saveState();
-      renderSunjune();
-    });
-    on("#sjFuelFactor", "input", (e) => {
-      const val = parseFloat(e.target.value);
-      sjState.fuelFactor = !isNaN(val) && val > 0 ? val : 1.25;
-      saveState();
-      updateDraftCalcPreview();
-      renderSunjune();
+      const tEl = $("#sjPreview .sj-sheet-title");
+      if (tEl) tEl.textContent = sjState.title || "BẢNG TỔNG HỢP PHÁT SINH";
     });
     on("#sjVatOn", "change", (e) => {
       sjState.vatOn = e.target.checked;
@@ -1438,12 +1539,11 @@
       renderSunjune();
     });
     on("#sjVatRate", "input", (e) => {
-      const val = parseFloat(e.target.value);
-      sjState.vatRate = isNaN(val) ? 0 : Math.max(0, Math.min(100, val));
+      const v = parseFloat(e.target.value);
+      sjState.vatRate = isNaN(v) ? 0 : Math.max(0, Math.min(100, v));
       saveState();
       renderSunjune();
     });
-
     bindClick("#sjToggleTariff", () => {
       showTariffDrawer = !showTariffDrawer;
       renderTariffDrawer();
@@ -1451,152 +1551,154 @@
     bindClick("#sjLoadSample", loadSampleTrips);
     bindClick("#sjClearAll", () => {
       if (!sjState.trips.length) return;
-      if (!window.confirm("Bạn chắc chắn muốn xoá toàn bộ danh sách chuyến trong Bảng kê Sunjune?")) return;
+      if (!window.confirm("Xoá toàn bộ các chuyến trong Bảng kê Sunjune?")) return;
       sjState.trips = [];
       saveState();
       renderSunjune();
-      toast("Đã xoá toàn bộ bảng kê Sunjune.");
+      toast("Đã xoá bảng kê.");
     });
 
-    // Draft Trip Inputs
+    // Khối 1: Thêm chuyến phát sinh
     on("#sjDate", "input", (e) => {
-      draftTrip.date = e.target.value;
+      draft.date = e.target.value;
     });
     on("#sjTruckCode", "change", (e) => {
-      draftTrip.truckCode = e.target.value;
-      applyAutoCalcToDraft(false);
+      draft.truckCode = e.target.value;
+      applyAutoFromTime(false);
     });
-    on("#sjContNo", "input", (e) => {
-      draftTrip.contNo = e.target.value;
+    on("#sjBookingRefs", "input", (e) => {
+      draft.bookingRefsText = e.target.value;
     });
-    on("#sjTripFactory", "change", (e) => {
-      draftTrip.factoryKey = e.target.value;
-      applyAutoCalcToDraft(false);
+    on("#sjShipments", "input", (e) => {
+      draft.shipmentsText = e.target.value;
     });
-    on("#sjInTime", "input", (e) => {
-      draftTrip.inTime = e.target.value;
-      applyAutoCalcToDraft(false);
+    on("#sjBookings", "input", (e) => {
+      draft.bookingsText = e.target.value;
+      updateDraftAmountsUi();
     });
-    on("#sjOutTime", "input", (e) => {
-      draftTrip.outTime = e.target.value;
-      applyAutoCalcToDraft(false);
+    on("#sjConts", "input", (e) => {
+      draft.contsText = e.target.value;
+      applyAutoFromTime(false);
     });
-    on("#sjMisa", "input", (e) => {
-      draftTrip.misaInvoice = e.target.value;
+    on("#sjVolumes", "input", (e) => {
+      draft.volumesText = e.target.value;
+    });
+    on("#sjInTimes", "input", (e) => {
+      draft.inTimesText = e.target.value;
+      applyAutoFromTime(false);
+    });
+    on("#sjOutTimes", "input", (e) => {
+      draft.outTimesText = e.target.value;
+      applyAutoFromTime(false);
     });
     on("#sjNextDay", "change", (e) => {
-      draftTrip.nextDay = e.target.checked;
-      applyAutoCalcToDraft(false);
+      draft.nextDay = e.target.checked;
+      applyAutoFromTime(false);
     });
     on("#sjDeductLunch", "change", (e) => {
-      draftTrip.deductLunch = e.target.checked;
-      applyAutoCalcToDraft(false);
+      draft.deductLunch = e.target.checked;
+      applyAutoFromTime(false);
     });
 
-    const bindManualNum = (sel, field, lockKey) => {
+    // Khối 2: Chi phí phát sinh
+    const bindNumFee = (sel, field, lockKey) => {
       on(sel, "input", (e) => {
         const val = parseFloat(e.target.value);
-        draftTrip[field] = isNaN(val) ? 0 : Math.max(0, val);
-        if (lockKey) manualLocked[lockKey] = true;
-        if (!manualLocked.note) {
-          draftTrip.note = buildAutoNote(draftTrip, calcTripMoney(draftTrip));
-          if ($("#sjNote")) $("#sjNote").value = draftTrip.note;
+        draft[field] = isNaN(val) ? 0 : Math.max(0, val);
+        if (lockKey) manualLocks[lockKey] = true;
+        if (!manualLocks.note) {
+          draft.note = buildAutoNote(draft);
+          if ($("#sjNote")) $("#sjNote").value = draft.note;
         }
-        updateDraftCalcPreview();
+        updateDraftAmountsUi();
       });
     };
-    bindManualNum("#sjExtraTrucks", "extraTrucks", "extraTrucks");
-    bindManualNum("#sjCancelCount", "cancelCount", null);
-    bindManualNum("#sjWaitHours", "waitHours", "waitHours");
-    bindManualNum("#sjOvernightCount", "overnightCount", "overnightCount");
-    bindManualNum("#sjShellDays", "shellDays", null);
-    bindManualNum("#sjTollFee", "tollFee", null);
-    bindManualNum("#sjOtherFee", "otherFee", null);
+    bindNumFee("#sjExtraTrucks", "extraTrucks", "extraTrucks");
+    bindNumFee("#sjWaitHours", "waitHours", "waitHours");
+    bindNumFee("#sjOvernightCount", "overnightCount", "overnightCount");
+    bindNumFee("#sjTollFee", "tollFee", null);
+
+    on("#sjCancelCount", "change", (e) => {
+      draft.cancelCount = Math.max(0, parseInt(e.target.value, 10) || 0);
+      if (!manualLocks.note) {
+        draft.note = buildAutoNote(draft);
+        if ($("#sjNote")) $("#sjNote").value = draft.note;
+      }
+      updateDraftAmountsUi();
+    });
+
+    const onShellChange = () => {
+      draft.shellFrom = $("#sjShellFrom")?.value || "";
+      draft.shellTo = $("#sjShellTo")?.value || "";
+      draft.shellDays = calcShellRange(draft.shellFrom, draft.shellTo).days;
+      if (!manualLocks.note) {
+        draft.note = buildAutoNote(draft);
+        if ($("#sjNote")) $("#sjNote").value = draft.note;
+      }
+      updateDraftAmountsUi();
+    };
+    on("#sjShellFrom", "change", onShellChange);
+    on("#sjShellTo", "change", onShellChange);
 
     on("#sjTendaOn", "change", (e) => {
-      draftTrip.tendaOn = e.target.checked;
-      if (!manualLocked.note) {
-        draftTrip.note = buildAutoNote(draftTrip, calcTripMoney(draftTrip));
-        if ($("#sjNote")) $("#sjNote").value = draftTrip.note;
+      draft.tendaOn = e.target.checked;
+      if (!manualLocks.note) {
+        draft.note = buildAutoNote(draft);
+        if ($("#sjNote")) $("#sjNote").value = draft.note;
       }
-      updateDraftCalcPreview();
+      updateDraftAmountsUi();
     });
     on("#sjNote", "input", (e) => {
-      draftTrip.note = e.target.value;
-      manualLocked.note = true;
+      draft.note = e.target.value;
+      manualLocks.note = true;
     });
 
     bindClick("#sjRecalcAuto", () => {
-      manualLocked = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
-      applyAutoCalcToDraft(true);
-      toast("Đã tính lại theo công thức chuẩn.");
-    });
-
-    bindClick("#sjAddBookingRow", () => {
-      draftTrip.bookings.push({ ref: "", shipment: "", booking: "", volume: "" });
-      renderBookingRows();
-      const rows = $("#sjBkRows")?.querySelectorAll("tr");
-      const last = rows?.[rows.length - 1]?.querySelector('input[data-bk-field="booking"]');
-      last?.focus();
-    });
-
-    bindClick("#sjTogglePaste", () => {
-      const box = $("#sjPasteBox");
-      if (box) box.hidden = !box.hidden;
-    });
-    bindClick("#sjCancelPaste", () => {
-      if ($("#sjPasteBox")) $("#sjPasteBox").hidden = true;
-    });
-    bindClick("#sjApplyPaste", () => {
-      const parsed = parsePastedBookings($("#sjPasteInput")?.value || "");
-      if (!parsed.length) return toast("Chưa có dữ liệu dán vào.");
-      const hasOnlyBlank =
-        draftTrip.bookings.length === 1 &&
-        !draftTrip.bookings[0].ref &&
-        !draftTrip.bookings[0].shipment &&
-        !draftTrip.bookings[0].booking &&
-        !draftTrip.bookings[0].volume;
-      if (hasOnlyBlank) draftTrip.bookings = parsed;
-      else draftTrip.bookings.push(...parsed);
-      if ($("#sjPasteInput")) $("#sjPasteInput").value = "";
-      if ($("#sjPasteBox")) $("#sjPasteBox").hidden = true;
-      renderBookingRows();
-      toast(`Đã tách và thêm ${parsed.length} booking vào cụm combine.`);
-    });
-
-    on("#sjBkRows", "input", (e) => {
-      const inp = e.target.closest("[data-bk-field]");
-      const tr = e.target.closest("tr[data-bk-idx]");
-      if (!inp || !tr) return;
-      const idx = +tr.dataset.bkIdx;
-      if (draftTrip.bookings[idx]) {
-        draftTrip.bookings[idx][inp.dataset.bkField] = inp.value;
-      }
-    });
-
-    on("#sjBkRows", "click", (e) => {
-      const btn = e.target.closest("[data-bk-del]");
-      if (!btn) return;
-      const idx = +btn.dataset.bkDel;
-      if (draftTrip.bookings.length <= 1) {
-        draftTrip.bookings[0] = { ref: "", shipment: "", booking: "", volume: "" };
-      } else {
-        draftTrip.bookings.splice(idx, 1);
-      }
-      renderBookingRows();
+      manualLocks = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
+      applyAutoFromTime(true);
+      toast("Đã tính lại chi phí theo giờ và công thức Tariff.");
     });
 
     bindClick("#sjResetForm", () => {
       editingTripId = null;
-      manualLocked = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
-      draftTrip = createEmptyDraft();
-      syncDraftInputsToForm();
+      manualLocks = { extraTrucks: false, waitHours: false, overnightCount: false, note: false };
+      draft = createEmptyDraft();
+      syncDraftToForm();
     });
-    bindClick("#sjSaveTripBtn", saveDraftTripToList);
 
+    bindClick("#sjSaveTripBtn", saveDraftTrip);
     on("#sjSearch", "input", (e) => {
       searchQuery = e.target.value;
       renderSunjune();
+    });
+
+    // Sửa trực tiếp Misa trên bảng xem trước & thao tác dòng
+    on("#sjPreview", "input", (e) => {
+      const cell = e.target.closest("[data-misa-trip]");
+      if (!cell) return;
+      const t = sjState.trips.find((x) => x.id === cell.dataset.misaTrip);
+      if (!t) return;
+      const val = cell.textContent.replace(/\s+/g, " ").trim();
+      const idx = +cell.dataset.misaIdx;
+      const field = cell.dataset.misaField;
+      const expanded = expandDraftRows(t);
+      if (expanded.splitCosts) {
+        t.lineMisa = t.lineMisa || [];
+        t.lineMisa[idx] = t.lineMisa[idx] || {};
+        t.lineMisa[idx][field] = val;
+      } else {
+        if (field === "inv") t.misaInvoice = val;
+        else t.misaAmount = val;
+      }
+      saveState();
+    });
+
+    on("#sjPreview", "keydown", (e) => {
+      const cell = e.target.closest("[data-misa-trip]");
+      if (cell && e.key === "Enter") {
+        e.preventDefault();
+        cell.blur();
+      }
     });
 
     on("#sjPreview", "click", (e) => {
@@ -1605,9 +1707,9 @@
         const found = sjState.trips.find((t) => t.id === editBtn.dataset.sjEdit);
         if (!found) return;
         editingTripId = found.id;
-        draftTrip = JSON.parse(JSON.stringify(found));
-        manualLocked = { extraTrucks: true, waitHours: true, overnightCount: true, note: true };
-        syncDraftInputsToForm();
+        draft = JSON.parse(JSON.stringify(found));
+        manualLocks = { extraTrucks: true, waitHours: true, overnightCount: true, note: true };
+        syncDraftToForm();
         $("#vSunjune")?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
@@ -1630,12 +1732,12 @@
         sjState.trips = sjState.trips.filter((t) => t.id !== id);
         if (editingTripId === id) {
           editingTripId = null;
-          draftTrip = createEmptyDraft();
-          syncDraftInputsToForm();
+          draft = createEmptyDraft();
+          syncDraftToForm();
         }
         saveState();
         renderSunjune();
-        toast("Đã xoá chuyến khỏi bảng kê.");
+        toast("Đã xoá chuyến.");
       }
     });
 
@@ -1651,9 +1753,9 @@
       if (!list.length) return toast("Chưa có dữ liệu bảng kê để xuất Excel.");
       try {
         const buf = await buildSunjuneXlsxBuffer(list);
-        const sfxName = sjState.period ? "-" + slug(sjState.period) : "";
-        downloadBuffer(`bang-ke-sunjune${sfxName}.xlsx`, buf);
-        toast(`Đã xuất bang-ke-sunjune${sfxName}.xlsx`);
+        const file = `bang-ke-sunjune.xlsx`;
+        downloadBuffer(file, buf);
+        toast(`Đã xuất ${file}`);
       } catch (err) {
         toast(`Không xuất được Excel: ${err.message}`, 5000);
       }
@@ -1662,10 +1764,10 @@
 
   function initSunjune() {
     loadState();
-    draftTrip = createEmptyDraft();
+    draft = createEmptyDraft();
     renderWorkspaceShell();
     bindEvents();
-    syncDraftInputsToForm();
+    syncDraftToForm();
     renderSunjune();
   }
 
@@ -1674,7 +1776,13 @@
     init: initSunjune,
     onShow: renderSunjune,
     onConfigChange: renderSunjune,
-    // Expose pure helpers for automated testing if needed
-    _test: { computeAutoTiming, calcTripMoney, parsePastedBookings, VN_TARIFF },
+    _test: {
+      expandDraftRows,
+      computeTimingForPair,
+      calcShellRange,
+      calcTripDetails,
+      buildAutoNote,
+      VN_TARIFF,
+    },
   };
 })();

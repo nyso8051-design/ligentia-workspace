@@ -1272,11 +1272,11 @@ table.tt {
   }
 }
 
-/* ---------- Tab 2: Bảng kê Sunjune ---------- */
+/* ---------- Tab 2: Bảng kê Sunjune (Gọn, thoáng, chuẩn form) ---------- */
 .sj-shell {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .sj-top-card,
@@ -1285,89 +1285,45 @@ table.tt {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 18px 20px;
+  padding: 16px 20px;
   box-shadow: var(--shadow-sm);
 }
 
-.sj-top-head,
+.sj-top-bar,
 .sj-editor-head,
-.sj-preview-bar,
-.sj-bk-head {
+.sj-preview-bar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
 }
 
-.sj-title {
-  margin: 0 0 4px;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--navy);
-}
-
-.sj-sub {
-  margin: 0;
-  font-size: 13px;
-  color: var(--mute);
-}
-
-.sj-top-btns,
-.sj-editor-actions,
-.sj-bk-btns,
-.sj-export-btns {
+.sj-title-group {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sj-meta-grid {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr 1.6fr 0.7fr auto;
   gap: 12px;
-  align-items: end;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
+  flex: 1;
 }
 
-.sj-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-
-.sj-field input,
-.sj-field select {
-  width: 100%;
+.sj-title-input {
+  min-width: 280px;
+  max-width: 460px;
+  flex: 1;
   height: 36px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink);
-  font: 500 13px/1.3 inherit;
+  font: 700 14px/1.3 inherit;
+  color: var(--navy);
+  background: var(--surface-alt);
 }
 
-.sj-field input:focus,
-.sj-field select:focus,
-.sj-bk-inp:focus,
-.sj-paste-box textarea:focus,
-.sj-search-box input:focus {
-  outline: none;
-  border-color: var(--navy);
-  box-shadow: 0 0 0 2px rgba(15, 41, 66, 0.08);
-}
-
-.sj-vat-box {
-  display: flex;
+.sj-vat-inline {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 36px;
   padding: 0 10px;
   background: var(--surface-alt);
@@ -1377,8 +1333,8 @@ table.tt {
   font-weight: 600;
 }
 
-.sj-vat-box input[type="number"] {
-  width: 58px;
+.sj-vat-inline input[type="number"] {
+  width: 54px;
   height: 26px;
   padding: 2px 6px;
   border: 1px solid var(--line-strong);
@@ -1387,8 +1343,16 @@ table.tt {
   font: 600 13px/1 inherit;
 }
 
+.sj-top-btns,
+.sj-export-btns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .sj-tariff-drawer {
-  margin-top: 14px;
+  margin-top: 12px;
   padding: 12px 14px;
   background: var(--surface-alt);
   border: 1px solid var(--line);
@@ -1398,10 +1362,19 @@ table.tt {
 .sj-tariff-title {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 12px;
-  align-items: baseline;
+  gap: 8px 12px;
+  align-items: center;
   margin-bottom: 8px;
   font-size: 12.5px;
+}
+
+.sj-tariff-select {
+  height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font: 600 12.5px/1.2 inherit;
 }
 
 .sj-tariff-title span {
@@ -1443,12 +1416,13 @@ table.tt {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .sj-editor-title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   font-size: 15px;
 }
@@ -1470,154 +1444,131 @@ table.tt {
   border-color: var(--warn-line);
 }
 
-.sj-form-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
+.sj-detect-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
 }
 
-.sj-check-col {
+.sj-calc-summary {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.sj-field {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding-top: 14px;
-}
-
-.sj-bk-section {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.sj-bk-head strong {
-  display: block;
-  font-size: 13.5px;
-  color: var(--navy);
-}
-
-.sj-hint {
-  display: block;
+  gap: 5px;
   font-size: 12px;
-  color: var(--mute);
-  margin-top: 2px;
-}
-
-.sj-paste-box {
-  margin-top: 10px;
-  padding: 10px;
-  background: var(--surface-alt);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
-}
-
-.sj-paste-box textarea {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  font: 12.5px/1.4 monospace;
-  resize: vertical;
-}
-
-.sj-paste-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.sj-bk-table-wrap {
-  margin-top: 10px;
-  overflow-x: auto;
-}
-
-.sj-bk-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.sj-bk-table th,
-.sj-bk-table td {
-  border: 1px solid var(--line);
-  padding: 6px 8px;
-  font-size: 12.5px;
-}
-
-.sj-bk-table th {
-  background: var(--surface-alt);
-  color: var(--ink-soft);
   font-weight: 600;
-  text-align: left;
+  color: var(--ink-soft);
 }
 
-.sj-bk-table td.c {
-  text-align: center;
-  color: var(--mute);
-}
-
-.sj-bk-inp {
+.sj-field input,
+.sj-field select,
+.sj-field textarea {
   width: 100%;
-  height: 30px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  font: 500 13px/1.2 inherit;
-  color: var(--ink);
-}
-
-.sj-bk-del {
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--mute);
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.sj-bk-del:hover {
-  background: var(--err-bg);
-  color: var(--err);
-}
-
-.sj-calc-section {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.sj-calc-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 9px 12px;
-  background: #f0f7ff;
-  border: 1px solid #bfdbfe;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  color: #1e3a5f;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 13px/1.35 inherit;
 }
 
-.sj-charges-grid {
+.sj-field input,
+.sj-field select {
+  height: 36px;
+}
+
+.sj-multi {
+  min-height: 36px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px !important;
+}
+
+.sj-field input:focus,
+.sj-field select:focus,
+.sj-field textarea:focus,
+.sj-search-box input:focus,
+.sj-title-input:focus {
+  outline: none;
+  border-color: var(--navy);
+  box-shadow: 0 0 0 2px rgba(15, 41, 66, 0.08);
+}
+
+.sj-form-grid-v2 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-top: 12px;
-  align-items: end;
+  align-items: start;
 }
 
-.sj-tenda-box {
+.sj-span-2 {
+  grid-column: span 2;
+}
+
+.sj-check-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 24px;
+}
+
+.sj-fees-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+
+.sj-fee-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sj-fee-amt {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mute);
+  padding-left: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sj-shell-range {
+  grid-column: span 2;
+}
+
+.sj-date-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sj-date-pair span {
+  color: var(--mute);
+  font-weight: 600;
+}
+
+.sj-tenda-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   height: 36px;
-  padding: 0 12px;
-  background: var(--surface-alt);
-  border: 1px solid var(--line);
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .sj-note-row {
@@ -1648,8 +1599,7 @@ table.tt {
 }
 
 .sj-preview-bar {
-  align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .sj-search-box {
@@ -1672,7 +1622,15 @@ table.tt {
 }
 
 .sj-sheet {
-  min-width: 1080px;
+  min-width: 1120px;
+}
+
+.sj-sheet-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 10px;
+  font-family: "Times New Roman", Times, serif;
 }
 
 .sj-table th {
@@ -1696,13 +1654,37 @@ table.tt {
   font-variant-numeric: tabular-nums;
 }
 
+.sj-date-row td {
+  background: #f1f5f9 !important;
+  font-weight: 700;
+  text-align: left !important;
+  padding: 5px 8px !important;
+  color: #0f172a;
+}
+
 .sj-note-cell {
-  min-width: 180px;
-  max-width: 260px;
+  min-width: 190px;
+  max-width: 280px;
   white-space: normal;
   word-break: break-word;
   text-align: left;
   font-size: 11px;
+}
+
+.sj-vat-footer-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.sj-vat-footer {
+  width: auto !important;
+  min-width: 380px;
+  margin: 0 !important;
+}
+
+.sj-vat-footer td {
+  padding: 6px 12px !important;
 }
 
 .sj-row-ops {
@@ -1738,13 +1720,14 @@ table.tt {
     gap: 18px;
     overflow-x: auto;
   }
-  .sj-meta-grid,
-  .sj-form-grid,
-  .sj-charges-grid,
+  .sj-form-grid-v2,
+  .sj-fees-grid,
   .sj-note-row,
   .sj-kpis {
     grid-template-columns: 1fr 1fr;
   }
+  .sj-span-2,
+  .sj-shell-range,
   .sj-note-field {
     grid-column: 1 / -1;
   }
