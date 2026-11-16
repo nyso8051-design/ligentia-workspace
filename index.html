@@ -6,7 +6,7 @@
   <title>Ligentia WorkSpace · Bảng kê phí</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261116d">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 </head>
@@ -15,7 +15,7 @@
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
-          <div class="brand-logo"><img id="bl" alt="Ligentia"></div>
+          <div class="brand-logo"><img id="bl" src="logo-ligentia.png" alt="Ligentia"></div>
           <div class="brand-text">
             <strong>Ligentia Workspace</strong>
             <span>Bảng kê phí vận hành</span>
@@ -23,7 +23,8 @@
         </div>
 
         <nav class="tabs" aria-label="Điều hướng chính">
-          <button type="button" data-v="main" class="tab on">Bảng kê</button>
+          <button type="button" data-v="main" class="tab on">Bảng kê Daily</button>
+          <button type="button" data-v="sunjune" class="tab">Bảng kê Sunjune</button>
           <button type="button" data-v="set" class="tab">Thông tin công ty</button>
         </nav>
 
@@ -195,6 +196,9 @@
         </section>
       </section>
 
+      <!-- Tab 2: Bảng kê Sunjune -->
+      <section id="vSunjune" hidden></section>
+
       <!-- Company Settings -->
       <section id="vSet" hidden>
         <div class="settings-card">
@@ -206,7 +210,7 @@
             <button type="button" class="btn btn-sm btn-ghost" id="rs">Khôi phục mặc định</button>
           </div>
           <div class="logo-row">
-            <div class="logo-box"><img id="sl" alt="Logo công ty"></div>
+            <div class="logo-box"><img id="sl" src="logo-ligentia.png" alt="Logo công ty"></div>
             <button type="button" class="btn btn-sm" id="lgb">Đổi logo</button>
             <input id="lgf" type="file" accept="image/*" hidden>
           </div>
@@ -217,6 +221,8 @@
   </div>
 
   <div id="printArea"></div>
-  <script src="app.js"></script>
+  <script src="core.js?v=20261116d"></script>
+  <script src="bang-ke-daily.js?v=20261116d"></script>
+  <script src="bang-ke-sunjune.js?v=20261116d"></script>
 </body>
 </html>
