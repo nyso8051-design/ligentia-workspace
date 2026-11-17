@@ -450,10 +450,10 @@
 
   function calcStatementSummary(tripsList) {
     const detailed = tripsList.map((t) => ({ trip: t, detail: calcTripDetails(t) }));
-    const subtotal = round3(detailed.reduce((s, x) => s + x.detail.tripTotal, 0));
+    const subtotal = Math.round(detailed.reduce((s, x) => s + x.detail.tripTotal, 0));
     const vatRate = sjState.vatOn ? Math.max(0, Number(sjState.vatRate) || 0) : 0;
-    const vatTax = sjState.vatOn && vatRate > 0 ? round3((subtotal * vatRate) / 100) : 0;
-    const grandTotal = round3(subtotal + vatTax);
+    const vatTax = sjState.vatOn && vatRate > 0 ? Math.round((subtotal * vatRate) / 100) : 0;
+    const grandTotal = Math.round(subtotal + vatTax);
     const totalBookings = detailed.reduce((s, x) => s + x.detail.expanded.rowCount, 0);
     return { detailed, subtotal, vatRate, vatTax, grandTotal, totalBookings };
   }
@@ -713,10 +713,10 @@
       <table class="t sj-table">
         <thead>
           <tr>
-            <th colspan="6">Thông tin lô hàng</th>
-            <th colspan="3">Thời gian xe</th>
-            <th colspan="7">Chi phí phát sinh</th>
-            <th colspan="2">Misa</th>
+            <th colspan="6" class="sj-gh-info">Thông tin lô hàng</th>
+            <th colspan="3" class="sj-gh-time">Thời gian xe</th>
+            <th colspan="7" class="sj-gh-cost">Chi phí phát sinh</th>
+            <th colspan="2" class="sj-gh-misa">Misa</th>
             ${!forPrint ? `<th rowspan="2" class="sj-op-col">Thao tác</th>` : ""}
           </tr>
           <tr>
@@ -729,8 +729,8 @@
             <th>In</th>
             <th>Out</th>
             <th>Loading time</th>
-            <th>Cước xe / Huỷ Xe</th>
-            <th>Lưu Ca / Giờ Chờ</th>
+            <th>Cước xe/Huỷ Xe</th>
+            <th>Lưu Ca/Giờ Chờ</th>
             <th>Gửi Vỏ</th>
             <th>Tenda</th>
             <th>Cao tốc</th>
@@ -746,7 +746,16 @@
     </div>`;
   }
 
-  /* ---------- Xuất Excel chuẩn 18 cột, công thức thật & thuế ngay dưới cột Tổng trả ---------- */
+  function estimateNoteLines(noteText, charsPerLine = 32) {
+    const text = String(noteText || "").trim();
+    if (!text) return 1;
+    return text.split(/\r?\n/).reduce((sum, seg) => {
+      const len = seg.trim().length;
+      return sum + Math.max(1, Math.ceil(len / charsPerLine));
+    }, 0);
+  }
+
+  /* ---------- Xuất Excel chuẩn 18 cột, đúng bố cục & màu sắc mẫu (A1:R3, 28pt, căn đều ô NOTE, làm tròn 0) ---------- */
   async function buildSunjuneXlsxBuffer(tripsList) {
     if (typeof ExcelJS === "undefined") {
       throw new Error("Thư viện xuất Excel (ExcelJS) chưa sẵn sàng. Vui lòng kiểm tra kết nối mạng và tải lại trang.");
@@ -769,7 +778,7 @@
     const sum = calcStatementSummary(tripsList);
     const groups = groupTripsByDate(sum.detailed);
 
-    const colWidths = [15, 13, 18, 14, 12, 10, 10, 10, 12, 16, 16, 13, 12, 12, 16, 38, 14, 15];
+    const colWidths = [15, 13, 18, 14, 12, 10, 10, 10, 12, 16, 16, 13, 12, 12, 16, 40, 14, 15];
     ws.columns = colWidths.map((w) => ({ width: w, style: { font: { name: "Times New Roman", size: 11 } } }));
 
     const G = "FF64748B";
@@ -784,21 +793,26 @@
     });
     const rt = (...p) => ({ richText: p.map(([t, z, b, i, c]) => ({ text: t, font: ft(z || 11, b, i, c) })) });
     const fill = (a) => ({ type: "pattern", pattern: "solid", fgColor: { argb: a } });
+    const BASE_ROW_PT = 28;
 
-    // Tiêu đề (Row 1) + 2 dòng trống (Rows 2-3) đúng chuẩn form mẫu
-    const titleRow = ws.addRow([sjState.title || "BẢNG TỔNG HỢP PHÁT SINH"]);
-    ws.mergeCells(1, 1, 1, 18);
-    titleRow.height = 26;
-    const tc = titleRow.getCell(1);
-    tc.font = ft(14, true);
-    tc.alignment = { horizontal: "left", vertical: "middle" };
+    // Tiêu đề A1:R3 (3 dòng gộp, căn giữa, 22pt đậm, chiều cao 28 mỗi dòng)
+    const r1 = ws.addRow([sjState.title || "BẢNG TỔNG HỢP PHÁT SINH"]);
+    const r2 = ws.addRow([]);
+    const r3 = ws.addRow([]);
+    r1.height = BASE_ROW_PT;
+    r2.height = BASE_ROW_PT;
+    r3.height = BASE_ROW_PT;
+    ws.mergeCells(1, 1, 3, 18);
+    const tc = r1.getCell(1);
+    tc.font = ft(22, true);
+    tc.alignment = { horizontal: "center", vertical: "middle" };
+    [r1, r2, r3].forEach((rr) => {
+      for (let c = 1; c <= 18; c++) rr.getCell(c).border = bd;
+    });
 
-    ws.addRow([]).height = 10;
-    ws.addRow([]).height = 10;
-
-    // 2 dòng Header nhóm + cột
+    // Row 4: Header nhóm (#FDEADA, #E0F2FE, #FEF3C7, #FDEADA) | Row 5: Header cột (nền trắng)
     const ghRow = ws.addRow([]);
-    ghRow.height = 22;
+    ghRow.height = BASE_ROW_PT;
     const chRow = ws.addRow([
       "Booking Ref",
       "Shipment",
@@ -819,14 +833,14 @@
       "Hoá đơn Misa",
       "Tiền Misa",
     ]);
-    chRow.height = 26;
+    chRow.height = BASE_ROW_PT;
     ws.pageSetup.printTitlesRow = `${ghRow.number}:${chRow.number}`;
 
     const headerGroups = [
-      { title: "Thông tin lô hàng", start: 1, span: 6, bg: "FFE2E8F0" },
+      { title: "Thông tin lô hàng", start: 1, span: 6, bg: "FFFDEADA" },
       { title: "Thời gian xe", start: 7, span: 3, bg: "FFE0F2FE" },
       { title: "Chi phí phát sinh", start: 10, span: 7, bg: "FFFEF3C7" },
-      { title: "Misa", start: 17, span: 2, bg: "FFDCFCE7" },
+      { title: "Misa", start: 17, span: 2, bg: "FFFDEADA" },
     ];
     headerGroups.forEach((g) => {
       if (g.span > 1) ws.mergeCells(ghRow.number, g.start, ghRow.number, g.start + g.span - 1);
@@ -843,21 +857,20 @@
       const cell = chRow.getCell(c);
       cell.font = ft(11, true);
       cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-      cell.fill = fill("FFF1F5F9");
       cell.border = bd;
     }
 
     const totalFormulaRefs = [];
 
     groups.forEach((grp) => {
-      // Dòng Ngày nằm ngang
+      // Dòng Ngày nằm ngang (#EBF1DE, căn giữa)
       const dRow = ws.addRow([grp.dateLabel]);
-      dRow.height = 20;
+      dRow.height = BASE_ROW_PT;
       ws.mergeCells(dRow.number, 1, dRow.number, 18);
       dRow.getCell(1).font = ft(11, true);
-      dRow.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+      dRow.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
       for (let c = 1; c <= 18; c++) {
-        dRow.getCell(c).fill = fill("FFF8FAFC");
+        dRow.getCell(c).fill = fill("FFEBF1DE");
         dRow.getCell(c).border = bd;
       }
 
@@ -866,10 +879,22 @@
         const rows = expanded.rows;
         const startRowNum = ws.rowCount + 1;
 
+        // Chuẩn chiều cao 28; nếu NOTE nhiều dòng thì kéo đều các dòng combine cho vừa nội dung
+        let perRowHeight = BASE_ROW_PT;
+        if (expanded.splitCosts) {
+          const maxLines = Math.max(1, ...lineCalcs.map((lc) => estimateNoteLines(lc.note, 32)));
+          perRowHeight = maxLines > 1 ? Math.max(BASE_ROW_PT, maxLines * 16 + 10) : BASE_ROW_PT;
+        } else {
+          const linesNeeded = estimateNoteLines(lineCalcs[0].note, 32);
+          const minTotalPt = linesNeeded > 1 ? linesNeeded * 16 + 10 : BASE_ROW_PT;
+          const neededTotal = Math.max(BASE_ROW_PT * rows.length, minTotalPt);
+          perRowHeight = +(neededTotal / rows.length).toFixed(1);
+        }
+
         rows.forEach((r, idx) => {
           const xlRow = ws.addRow([]);
           const rn = xlRow.number;
-          xlRow.height = 22;
+          xlRow.height = perRowHeight;
 
           const setC = (col, val, align = "center", bold = false, numFmtStr = null) => {
             const cell = xlRow.getCell(col);
@@ -969,53 +994,51 @@
       });
     });
 
-    // Bảng Thuế 3 dòng nằm ngay dưới cột Tổng trả (cột 12-14 nhãn | cột 15 = O số tiền) đúng chuẩn form CSV mẫu
+    // Bảng Thuế 3 dòng nằm ngay dưới cột Tổng trả (cột 12-14 nhãn | cột 15 = O số tiền), nền trắng đúng mẫu & làm tròn 0
     const firstDataRow = chRow.number + 1;
     const lastDataRow = ws.rowCount;
-    ws.addRow([]).height = 10;
-    const sumFormulaExpr = totalFormulaRefs.length ? `ROUND(SUM(O${firstDataRow}:O${lastDataRow}),3)` : "0";
-    const addVatBoxRow = (labelRich, valOrFormula, numFmtStr, boldVal = true) => {
+    ws.addRow([]).height = 14;
+    const sumFormulaExpr = totalFormulaRefs.length ? `ROUND(SUM(O${firstDataRow}:O${lastDataRow}),0)` : "0";
+    const addVatBoxRow = (labelRich, valOrFormula, numFmtStr) => {
       const r = ws.addRow([]);
-      r.height = 22;
+      r.height = BASE_ROW_PT;
       ws.mergeCells(r.number, 12, r.number, 14);
       const lc = r.getCell(12);
       lc.value = labelRich;
       lc.alignment = { horizontal: "right", vertical: "middle" };
       const vc = r.getCell(15);
       vc.value = valOrFormula;
-      vc.font = ft(11, boldVal);
+      vc.font = ft(11, true);
       vc.alignment = { horizontal: "right", vertical: "middle" };
       vc.numFmt = numFmtStr;
-      for (let c = 12; c <= 15; c++) r.getCell(c).border = bd;
+      for (let c = 12; c <= 15; c++) {
+        r.getCell(c).border = bd;
+      }
       return r;
     };
 
     const subRow = addVatBoxRow(
       rt(["Tổng trước thuế "], ["(Subtotal)", 11, false, true], [":"]),
       totalFormulaRefs.length ? { formula: sumFormulaExpr, result: sum.subtotal } : 0,
-      xlsxFmt(sum.subtotal),
-      true
+      "#,##0"
     );
     if (sjState.vatOn && sum.vatTax > 0) {
       const rateStr = String(round3(sum.vatRate));
       const vatRow = addVatBoxRow(
         rt([`Thuế suất GTGT ${rateStr}% `], [`(VAT ${rateStr}%)`, 11, false, true], [":"]),
-        { formula: `ROUND(O${subRow.number}*${round3(sum.vatRate) / 100},3)`, result: sum.vatTax },
-        xlsxFmt(sum.vatTax),
-        true
+        { formula: `ROUND(O${subRow.number}*${round3(sum.vatRate) / 100},0)`, result: sum.vatTax },
+        "#,##0"
       );
       addVatBoxRow(
         rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
-        { formula: `ROUND(O${subRow.number}+O${vatRow.number},3)`, result: sum.grandTotal },
-        xlsxFmt(sum.grandTotal),
-        true
+        { formula: `ROUND(O${subRow.number}+O${vatRow.number},0)`, result: sum.grandTotal },
+        "#,##0"
       );
     } else {
       addVatBoxRow(
         rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
         { formula: `O${subRow.number}`, result: sum.grandTotal },
-        xlsxFmt(sum.grandTotal),
-        true
+        "#,##0"
       );
     }
 
@@ -1071,7 +1094,7 @@
               <input id="sjDate" type="text" placeholder="VD: 23.OCT hoặc 23/10">
             </label>
             <label class="sj-field">
-              <span>Type of Truck (Loại xe / Cont)</span>
+              <span>Type of Truck</span>
               <select id="sjTruckCode">
                 <optgroup label="Hàng lẻ (LCL · Free 2h)">
                   ${VEHICLE_OPTIONS.filter((v) => !v.isFcl)
@@ -1086,33 +1109,33 @@
               </select>
             </label>
             <label class="sj-field">
-              <span>Booking Ref (SE · cách nhau dấu cách)</span>
+              <span>Booking Ref</span>
               <textarea id="sjBookingRefs" rows="1" class="sj-multi" placeholder="VD: SE1809260288"></textarea>
             </label>
             <label class="sj-field">
-              <span>Shipment (cách nhau dấu cách)</span>
+              <span>Shipment</span>
               <textarea id="sjShipments" rows="1" class="sj-multi" placeholder="VD: S02315494"></textarea>
             </label>
 
             <label class="sj-field sj-span-2">
-              <span>Số Booking (dán nhiều mã cách nhau dấu cách/xuống dòng để tự Combine)</span>
-              <textarea id="sjBookings" rows="2" class="sj-multi" placeholder="VD: WAL076N05527HN0 WAL076N05528HN0 WAL076N05529HN0"></textarea>
+              <span>Số Booking</span>
+              <textarea id="sjBookings" rows="2" class="sj-multi" placeholder="VD: WAL076N05527HN0 WAL076N05528HN0"></textarea>
             </label>
             <label class="sj-field">
-              <span>Số Cont (1 số = Merge · nhiều số = tách dòng)</span>
-              <textarea id="sjConts" rows="2" class="sj-multi" placeholder="VD: FSCU5960847 (hoặc 3 cont cách dấu cách)"></textarea>
+              <span>Số Cont</span>
+              <textarea id="sjConts" rows="2" class="sj-multi" placeholder="VD: FSCU5960847"></textarea>
             </label>
             <label class="sj-field">
-              <span>Volume (cách nhau dấu cách · lớn nhất in đậm)</span>
+              <span>Volume</span>
               <textarea id="sjVolumes" rows="2" class="sj-multi" placeholder="VD: 5.571 4.414 3.664 (hoặc 40HC)"></textarea>
             </label>
 
             <label class="sj-field">
-              <span>Giờ vào (In · 1 hoặc nhiều cách dấu cách)</span>
+              <span>Giờ vào (In)</span>
               <input id="sjInTimes" type="text" placeholder="VD: 08:19">
             </label>
             <label class="sj-field">
-              <span>Giờ ra (Out · 1 hoặc nhiều cách dấu cách)</span>
+              <span>Giờ ra (Out)</span>
               <input id="sjOutTimes" type="text" placeholder="VD: 16:40">
             </label>
             <div class="sj-check-row sj-span-2">
@@ -1830,6 +1853,9 @@
       computeTimingForPair,
       calcShellRange,
       calcTripDetails,
+      calcStatementSummary,
+      estimateNoteLines,
+      buildSunjuneXlsxBuffer,
       buildAutoNote,
       autoSheetName,
       safeSheetName,

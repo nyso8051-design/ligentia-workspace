@@ -1642,27 +1642,60 @@ table.tt {
 }
 
 .sj-sheet {
-  min-width: 1020px;
+  width: max-content;
+  min-width: 100%;
   padding: 16px 18px;
 }
 
 .sj-sheet-title {
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 700;
   color: #111827;
-  margin-bottom: 10px;
+  text-align: center;
+  padding: 8px 8px 12px;
+  margin-bottom: 4px;
   font-family: "Times New Roman", Times, serif;
 }
 
+.sj-table {
+  font-family: "Times New Roman", Times, serif;
+}
+
+.sj-table thead tr:first-child th.sj-gh-info,
+.sj-table thead tr:first-child th.sj-gh-misa {
+  background: #fdeada !important;
+  color: #111827;
+}
+
+.sj-table thead tr:first-child th.sj-gh-time {
+  background: #e0f2fe !important;
+  color: #111827;
+}
+
+.sj-table thead tr:first-child th.sj-gh-cost {
+  background: #fef3c7 !important;
+  color: #111827;
+}
+
+.sj-table thead tr:first-child th.sj-op-col {
+  background: #f8fafc !important;
+  color: #111827;
+}
+
+.sj-table thead tr:nth-child(2) th {
+  background: #ffffff !important;
+  color: #111827;
+}
+
 .sj-table th {
-  font-size: 10.5px;
-  padding: 5px 4px;
+  font-size: 11px;
+  padding: 6px 4px;
   white-space: nowrap;
 }
 
 .sj-table td {
-  font-size: 11px;
-  padding: 5px 4px;
+  font-size: 11.5px;
+  padding: 6px 4px;
   vertical-align: middle;
 }
 
@@ -1676,11 +1709,11 @@ table.tt {
 }
 
 .sj-date-row td {
-  background: #f1f5f9 !important;
+  background: #ebf1de !important;
   font-weight: 700;
-  text-align: left !important;
-  padding: 5px 8px !important;
-  color: #0f172a;
+  text-align: center !important;
+  padding: 6px 8px !important;
+  color: #111827;
 }
 
 .sj-note-cell {
@@ -1689,12 +1722,12 @@ table.tt {
   white-space: normal;
   word-break: break-word;
   text-align: left;
-  font-size: 11px;
+  font-size: 11.5px;
 }
 
 .sj-vat-gap td {
   border: 0 !important;
-  height: 10px;
+  height: 12px;
   padding: 0 !important;
   background: transparent !important;
 }
@@ -1706,9 +1739,10 @@ table.tt {
 
 .sj-vat-row td.sj-vat-lbl {
   text-align: right;
-  font-weight: 600;
-  padding: 5px 8px;
-  background: #f8fafc;
+  font-weight: 400;
+  padding: 6px 8px;
+  background: #ffffff;
+  color: #111827;
   white-space: nowrap;
 }
 
@@ -1716,13 +1750,15 @@ table.tt {
   text-align: right;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  padding: 5px 6px;
+  padding: 6px 6px;
+  background: #ffffff;
+  color: #111827;
 }
 
 .sj-vat-row.gt td.sj-vat-lbl,
 .sj-vat-row.gt td.sj-vat-val {
-  background: #eef2f8;
-  color: #0f172a;
+  background: #ffffff;
+  color: #111827;
   font-size: 11.5px;
 }
 
