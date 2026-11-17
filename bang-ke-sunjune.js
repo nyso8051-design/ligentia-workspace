@@ -120,6 +120,14 @@
     return raw.toUpperCase();
   }
 
+  function normalizeTimeStr(str) {
+    return String(str || "")
+      .trim()
+      .replace(/(\d{1,2})\s*[:hHgG]\s*(\d{1,2})(?:\s*:\s*(\d{1,2}))?/g, (_, h, m, s) =>
+        s !== undefined ? `${h}:${m}:${s}` : `${h}:${m}`
+      );
+  }
+
   function splitTokens(str) {
     return String(str || "")
       .split(/[\s,;|\n\r]+/)
@@ -127,8 +135,16 @@
       .filter(Boolean);
   }
 
+  function splitTimeTokens(str) {
+    const cleaned = String(str || "").replace(
+      /(\d{1,2})\s*[:hHgG]\s*(\d{1,2})(?:\s*:\s*(\d{1,2}))?/g,
+      (_, h, m, s) => (s !== undefined ? `${h}:${m}:${s}` : `${h}:${m}`)
+    );
+    return splitTokens(cleaned).filter((s) => /\d/.test(s));
+  }
+
   function parseTimeToMins(str) {
-    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
+    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(normalizeTimeStr(str));
     if (!m) return null;
     const h = +m[1];
     const mi = +m[2];
@@ -138,13 +154,13 @@
   }
 
   function fmtTimeStr(str) {
-    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
+    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(normalizeTimeStr(str));
     if (!m) return String(str || "").trim();
     return `${String(+m[1]).padStart(2, "0")}:${String(+m[2]).padStart(2, "0")}:${String(+(m[3] || 0)).padStart(2, "0")}`;
   }
 
   function timeStrToExcelFraction(str) {
-    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(String(str || "").trim());
+    const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(normalizeTimeStr(str));
     if (!m) return null;
     const secs = +m[1] * 3600 + +m[2] * 60 + +(m[3] || 0);
     return secs / 86400;
@@ -211,12 +227,26 @@
     const bks = splitTokens(t.bookingsText);
     const conts = splitTokens(t.contsText);
     const vols = splitTokens(t.volumesText);
-    const ins = splitTokens(t.inTimesText);
-    const outs = splitTokens(t.outTimesText);
+    const rawIns = splitTimeTokens(t.inTimesText);
+    const rawOuts = splitTimeTokens(t.outTimesText);
 
-    const rowCount = Math.max(1, bks.length, conts.length, ins.length, outs.length, refs.length > 1 ? refs.length : 1, ships.length > 1 ? ships.length : 1);
+    // Nếu người dùng dán/nhập cả giờ In & Out (2 mốc giờ) vào riêng ô In trong khi ô Out đang trống -> ghép thành 1 cặp In–Out
+    const singlePairInOneBox =
+      conts.length <= 1 &&
+      rawOuts.length === 0 &&
+      rawIns.length === 2 &&
+      parseTimeToMins(rawIns[0]) !== null &&
+      parseTimeToMins(rawIns[1]) !== null;
+    const ins = singlePairInOneBox ? [rawIns[0]] : rawIns;
+    const outs = singlePairInOneBox ? [rawIns[1]] : rawOuts;
+
+    const validIns = ins.filter((s) => parseTimeToMins(s) !== null);
+    const validOuts = outs.filter((s) => parseTimeToMins(s) !== null);
+    const timeRowCount = Math.max(validIns.length, validOuts.length);
+
+    const rowCount = Math.max(1, bks.length, conts.length, timeRowCount, refs.length > 1 ? refs.length : 1, ships.length > 1 ? ships.length : 1);
     const isSplitByCont = conts.length > 1;
-    const isSplitByTime = ins.length > 1 || outs.length > 1;
+    const isSplitByTime = validIns.length > 1 || validOuts.length > 1;
     const splitCosts = isSplitByCont || isSplitByTime;
 
     const veh = getVehicle(t.truckCode);
@@ -1658,6 +1688,17 @@
     on("#sjInTimes", "input", (e) => {
       draft.inTimesText = e.target.value;
       applyAutoFromTime(false);
+    });
+    on("#sjInTimes", "paste", (e) => {
+      const txt = e.clipboardData?.getData("text") || "";
+      if (!txt.includes("\t") || /[\r\n]/.test(txt.trim())) return;
+      const cols = txt.split("\t").map((s) => normalizeTimeStr(s));
+      if (cols.length === 2 && parseTimeToMins(cols[0]) !== null && parseTimeToMins(cols[1]) !== null && !($("#sjOutTimes")?.value || "").trim()) {
+        e.preventDefault();
+        draft.inTimesText = cols[0];
+        draft.outTimesText = cols[1];
+        applyAutoFromTime(false);
+      }
     });
     on("#sjOutTimes", "input", (e) => {
       draft.outTimesText = e.target.value;
