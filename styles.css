@@ -1522,6 +1522,10 @@ table.tt {
   grid-column: span 2;
 }
 
+.sj-span-3 {
+  grid-column: span 3;
+}
+
 .sj-check-row {
   display: flex;
   align-items: center;
@@ -1721,7 +1725,7 @@ table.tt {
   max-width: 280px;
   white-space: normal;
   word-break: break-word;
-  text-align: left;
+  text-align: center;
   font-size: 11.5px;
 }
 
@@ -1802,6 +1806,7 @@ table.tt {
     grid-template-columns: 1fr 1fr;
   }
   .sj-span-2,
+  .sj-span-3,
   .sj-shell-range,
   .sj-note-field {
     grid-column: 1 / -1;

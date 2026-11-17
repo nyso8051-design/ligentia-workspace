@@ -964,7 +964,7 @@
             setC(15, { formula: `ROUND(SUM(J${rn}:N${rn}),3)`, result: lc.totalFee }, "right", true, xlsxFmt(lc.totalFee));
             totalFormulaRefs.push(`O${rn}`);
 
-            setC(16, lc.note || "", "left");
+            setC(16, lc.note || "", "center");
 
             const misaInv = expanded.splitCosts ? (trip.lineMisa?.[idx]?.inv ?? (idx === 0 ? trip.misaInvoice : "")) : (trip.misaInvoice || "");
             const misaAmtRaw = expanded.splitCosts ? (trip.lineMisa?.[idx]?.amt ?? (idx === 0 ? trip.misaAmount : "")) : (trip.misaAmount || "");
@@ -1094,6 +1094,23 @@
               <input id="sjDate" type="text" placeholder="VD: 23.OCT hoặc 23/10">
             </label>
             <label class="sj-field">
+              <span>Booking Ref</span>
+              <textarea id="sjBookingRefs" rows="1" class="sj-multi" placeholder="VD: SE1809260288"></textarea>
+            </label>
+            <label class="sj-field">
+              <span>Shipment</span>
+              <textarea id="sjShipments" rows="1" class="sj-multi" placeholder="VD: S02315494"></textarea>
+            </label>
+            <label class="sj-field">
+              <span>Số Booking</span>
+              <textarea id="sjBookings" rows="1" class="sj-multi" placeholder="VD: WAL076N05527HN0 WAL076N05528HN0"></textarea>
+            </label>
+
+            <label class="sj-field">
+              <span>Số Cont</span>
+              <textarea id="sjConts" rows="1" class="sj-multi" placeholder="VD: FSCU5960847"></textarea>
+            </label>
+            <label class="sj-field">
               <span>Type of Truck</span>
               <select id="sjTruckCode">
                 <optgroup label="Hàng lẻ (LCL · Free 2h)">
@@ -1109,36 +1126,19 @@
               </select>
             </label>
             <label class="sj-field">
-              <span>Booking Ref</span>
-              <textarea id="sjBookingRefs" rows="1" class="sj-multi" placeholder="VD: SE1809260288"></textarea>
-            </label>
-            <label class="sj-field">
-              <span>Shipment</span>
-              <textarea id="sjShipments" rows="1" class="sj-multi" placeholder="VD: S02315494"></textarea>
-            </label>
-
-            <label class="sj-field sj-span-2">
-              <span>Số Booking</span>
-              <textarea id="sjBookings" rows="2" class="sj-multi" placeholder="VD: WAL076N05527HN0 WAL076N05528HN0"></textarea>
-            </label>
-            <label class="sj-field">
-              <span>Số Cont</span>
-              <textarea id="sjConts" rows="2" class="sj-multi" placeholder="VD: FSCU5960847"></textarea>
-            </label>
-            <label class="sj-field">
               <span>Volume</span>
-              <textarea id="sjVolumes" rows="2" class="sj-multi" placeholder="VD: 5.571 4.414 3.664 (hoặc 40HC)"></textarea>
+              <textarea id="sjVolumes" rows="1" class="sj-multi" placeholder="VD: 5.571 4.414 3.664 (hoặc 40HC)"></textarea>
             </label>
-
             <label class="sj-field">
               <span>Giờ vào (In)</span>
               <input id="sjInTimes" type="text" placeholder="VD: 08:19">
             </label>
+
             <label class="sj-field">
               <span>Giờ ra (Out)</span>
               <input id="sjOutTimes" type="text" placeholder="VD: 16:40">
             </label>
-            <div class="sj-check-row sj-span-2">
+            <div class="sj-check-row sj-span-3">
               <label class="check-inline">
                 <input id="sjNextDay" type="checkbox">
                 <span>Ra ngày hôm sau</span>
@@ -1162,6 +1162,17 @@
           </div>
 
           <div class="sj-fees-grid">
+            <div class="sj-fee-item">
+              <div class="sj-field">
+                <span>Tenda</span>
+                <label class="sj-tenda-toggle">
+                  <input id="sjTendaOn" type="checkbox" checked>
+                  <span>Áp dụng Tenda</span>
+                </label>
+              </div>
+              <small id="sjTendaAmt" class="sj-fee-amt">1,000,000 đ</small>
+            </div>
+
             <div class="sj-fee-item">
               <label class="sj-field">
                 <span>Phát sinh chuyến (4h = 1 Truck)</span>
@@ -1211,17 +1222,6 @@
                 </div>
               </div>
               <small id="sjShellAmt" class="sj-fee-amt">0 ngày · 0 đ</small>
-            </div>
-
-            <div class="sj-fee-item">
-              <div class="sj-field">
-                <span>Tenda</span>
-                <label class="sj-tenda-toggle">
-                  <input id="sjTendaOn" type="checkbox" checked>
-                  <span>Áp dụng Tenda</span>
-                </label>
-              </div>
-              <small id="sjTendaAmt" class="sj-fee-amt">1,000,000 đ</small>
             </div>
 
             <div class="sj-fee-item">
