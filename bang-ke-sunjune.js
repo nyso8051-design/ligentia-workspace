@@ -86,6 +86,7 @@
 
   let sjState = {
     title: "BẢNG TỔNG HỢP PHÁT SINH",
+    sheetName: "",
     defaultFactory: "sunjune",
     vatOn: true,
     vatRate: 8,
@@ -494,6 +495,7 @@
       if (raw && typeof raw === "object") {
         sjState = {
           title: typeof raw.title === "string" && raw.title ? raw.title : "BẢNG TỔNG HỢP PHÁT SINH",
+          sheetName: typeof raw.sheetName === "string" ? raw.sheetName : "",
           defaultFactory: raw.defaultFactory || "sunjune",
           vatOn: typeof raw.vatOn === "boolean" ? raw.vatOn : true,
           vatRate: raw.vatRate !== undefined && !isNaN(Number(raw.vatRate)) ? Number(raw.vatRate) : 8,
@@ -543,6 +545,36 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(sjState));
     } catch {}
+  }
+
+  function autoSheetName(tripsList) {
+    const dates = [];
+    const seen = new Set();
+    (tripsList || []).forEach((t) => {
+      const d = normalizeDateLabel(t.date);
+      if (d && !seen.has(d)) {
+        seen.add(d);
+        dates.push(d);
+      }
+    });
+    if (!dates.length) return "Bang_Ke_Phat_Sinh";
+    if (dates.length === 1) return dates[0];
+    return `${dates[0]} - ${dates[dates.length - 1]}`;
+  }
+
+  function safeSheetName(raw) {
+    return String(raw || "")
+      .replace(/[\\\/?*\[\]:]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 31) || "Bang_Ke_Phat_Sinh";
+  }
+
+  function safeFileName(raw) {
+    return String(raw || "BẢNG TỔNG HỢP PHÁT SINH")
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim() || "BẢNG TỔNG HỢP PHÁT SINH";
   }
 
   /* ---------- HTML Preview & Print Sheet (Đúng 18 cột & Dòng Date ngang) ---------- */
@@ -657,6 +689,24 @@
         .join("");
     }
 
+    const trailSpan = forPrint ? 3 : 4;
+    const vatSpacerRow = `<tr class="sj-vat-gap"><td colspan="${totalCols}"></td></tr>`;
+    const vatRowHtml = (labelHtml, valNum, bold = false) =>
+      `<tr class="sj-vat-row ${bold ? "gt" : ""}">
+        <td colspan="11" class="sj-vat-blank"></td>
+        <td colspan="3" class="sj-vat-lbl">${labelHtml}</td>
+        <td class="sj-vat-val">${fmt(valNum)}</td>
+        <td colspan="${trailSpan}" class="sj-vat-blank"></td>
+      </tr>`;
+
+    const vatRowsHtml =
+      sjState.vatOn && sum.vatTax > 0
+        ? vatSpacerRow +
+          vatRowHtml(`Tổng trước thuế <i>(Subtotal)</i>:`, sum.subtotal) +
+          vatRowHtml(`Thuế suất GTGT ${esc(String(round3(sum.vatRate)))}% <i>(VAT ${esc(String(round3(sum.vatRate)))}%)</i>:`, sum.vatTax) +
+          vatRowHtml(`Tổng sau thuế <i>(Total payment)</i>:`, sum.grandTotal, true)
+        : vatSpacerRow + vatRowHtml(`Tổng sau thuế <i>(Total payment)</i>:`, sum.grandTotal, true);
+
     return `<div class="sheet sj-sheet">
       <div class="sj-sheet-title">${esc(sjState.title || "BẢNG TỔNG HỢP PHÁT SINH")}</div>
 
@@ -691,29 +741,19 @@
           </tr>
         </thead>
         <tbody>${bodyHtml}</tbody>
+        <tfoot>${vatRowsHtml}</tfoot>
       </table>
-
-      <div class="sj-vat-footer-wrap">
-        <table class="tt sj-vat-footer">
-          ${
-            sjState.vatOn && sum.vatTax > 0
-              ? `<tr><td>Tổng trước thuế <i>(Subtotal)</i>:</td><td>${fmt(sum.subtotal)}</td></tr>
-                 <tr><td>Thuế suất GTGT ${esc(String(round3(sum.vatRate)))}% <i>(VAT ${esc(String(round3(sum.vatRate)))}%)</i>:</td><td>${fmt(sum.vatTax)}</td></tr>
-                 <tr class="gt"><td>Tổng sau thuế <i>(Total payment)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
-              : `<tr class="gt"><td>Tổng sau thuế <i>(Total payment)</i>:</td><td>${fmt(sum.grandTotal)}</td></tr>`
-          }
-        </table>
-      </div>
     </div>`;
   }
 
-  /* ---------- Xuất Excel chuẩn 18 cột, công thức thật & bảng thuế 3 dòng bên phải ---------- */
+  /* ---------- Xuất Excel chuẩn 18 cột, công thức thật & thuế ngay dưới cột Tổng trả ---------- */
   async function buildSunjuneXlsxBuffer(tripsList) {
     if (typeof ExcelJS === "undefined") {
       throw new Error("Thư viện xuất Excel (ExcelJS) chưa sẵn sàng. Vui lòng kiểm tra kết nối mạng và tải lại trang.");
     }
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Bang_Ke_Phat_Sinh", {
+    const sheetTitle = safeSheetName(sjState.sheetName.trim() || autoSheetName(tripsList));
+    const ws = wb.addWorksheet(sheetTitle, {
       views: [{ showGridLines: true }],
       pageSetup: {
         orientation: "landscape",
@@ -745,15 +785,16 @@
     const rt = (...p) => ({ richText: p.map(([t, z, b, i, c]) => ({ text: t, font: ft(z || 11, b, i, c) })) });
     const fill = (a) => ({ type: "pattern", pattern: "solid", fgColor: { argb: a } });
 
-    // Tiêu đề gọn đúng chuẩn form mẫu
+    // Tiêu đề (Row 1) + 2 dòng trống (Rows 2-3) đúng chuẩn form mẫu
     const titleRow = ws.addRow([sjState.title || "BẢNG TỔNG HỢP PHÁT SINH"]);
     ws.mergeCells(1, 1, 1, 18);
-    titleRow.height = 28;
+    titleRow.height = 26;
     const tc = titleRow.getCell(1);
     tc.font = ft(14, true);
     tc.alignment = { horizontal: "left", vertical: "middle" };
 
-    ws.addRow([]).height = 8;
+    ws.addRow([]).height = 10;
+    ws.addRow([]).height = 10;
 
     // 2 dòng Header nhóm + cột
     const ghRow = ws.addRow([]);
@@ -928,7 +969,7 @@
       });
     });
 
-    // Bảng Thuế 3 dòng đóng khung gọn bên phải giống ảnh mẫu (cột 15-16 nhãn | cột 17-18 số tiền)
+    // Bảng Thuế 3 dòng nằm ngay dưới cột Tổng trả (cột 12-14 nhãn | cột 15 = O số tiền) đúng chuẩn form CSV mẫu
     const firstDataRow = chRow.number + 1;
     const lastDataRow = ws.rowCount;
     ws.addRow([]).height = 10;
@@ -936,17 +977,16 @@
     const addVatBoxRow = (labelRich, valOrFormula, numFmtStr, boldVal = true) => {
       const r = ws.addRow([]);
       r.height = 22;
-      ws.mergeCells(r.number, 15, r.number, 16);
-      ws.mergeCells(r.number, 17, r.number, 18);
-      const lc = r.getCell(15);
+      ws.mergeCells(r.number, 12, r.number, 14);
+      const lc = r.getCell(12);
       lc.value = labelRich;
       lc.alignment = { horizontal: "right", vertical: "middle" };
-      const vc = r.getCell(17);
+      const vc = r.getCell(15);
       vc.value = valOrFormula;
       vc.font = ft(11, boldVal);
       vc.alignment = { horizontal: "right", vertical: "middle" };
       vc.numFmt = numFmtStr;
-      for (let c = 15; c <= 18; c++) r.getCell(c).border = bd;
+      for (let c = 12; c <= 15; c++) r.getCell(c).border = bd;
       return r;
     };
 
@@ -960,20 +1000,20 @@
       const rateStr = String(round3(sum.vatRate));
       const vatRow = addVatBoxRow(
         rt([`Thuế suất GTGT ${rateStr}% `], [`(VAT ${rateStr}%)`, 11, false, true], [":"]),
-        { formula: `ROUND(Q${subRow.number}*${round3(sum.vatRate) / 100},3)`, result: sum.vatTax },
+        { formula: `ROUND(O${subRow.number}*${round3(sum.vatRate) / 100},3)`, result: sum.vatTax },
         xlsxFmt(sum.vatTax),
         true
       );
       addVatBoxRow(
         rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
-        { formula: `ROUND(Q${subRow.number}+Q${vatRow.number},3)`, result: sum.grandTotal },
+        { formula: `ROUND(O${subRow.number}+O${vatRow.number},3)`, result: sum.grandTotal },
         xlsxFmt(sum.grandTotal),
         true
       );
     } else {
       addVatBoxRow(
         rt(["Tổng sau thuế "], ["(Total payment)", 11, false, true], [":"]),
-        { formula: `Q${subRow.number}`, result: sum.grandTotal },
+        { formula: `O${subRow.number}`, result: sum.grandTotal },
         xlsxFmt(sum.grandTotal),
         true
       );
@@ -993,7 +1033,8 @@
         <div class="sj-top-card">
           <div class="sj-top-bar">
             <div class="sj-title-group">
-              <input id="sjTitle" class="sj-title-input" type="text" value="${esc(sjState.title)}" aria-label="Tiêu đề bảng kê">
+              <input id="sjTitle" class="sj-title-input" type="text" value="${esc(sjState.title)}" placeholder="VD: BẢNG TỔNG HỢP PHÁT SINH TỪ 03.10 - 15.10.26" aria-label="Tiêu đề bảng kê & tên file">
+              <input id="sjSheetName" class="sj-sheet-input" type="text" value="${esc(sjState.sheetName)}" placeholder="Sheet: ${esc(autoSheetName(sjState.trips))}" aria-label="Tên sheet Excel" title="Tên sheet trong file Excel (để trống sẽ tự lấy theo ngày đầu – cuối)">
               <div class="sj-vat-inline">
                 <label class="check-inline">
                   <input id="sjVatOn" type="checkbox" ${sjState.vatOn ? "checked" : ""}>
@@ -1393,6 +1434,10 @@
         .join("");
     }
     renderTariffDrawer();
+    const sheetInp = $("#sjSheetName");
+    if (sheetInp) {
+      sheetInp.placeholder = `Sheet: ${autoSheetName(sjState.trips)}`;
+    }
     if ($("#sjPreview")) $("#sjPreview").innerHTML = buildStatementHtml(filteredTrips(), false);
   }
 
@@ -1437,28 +1482,28 @@
     const samples = [
       {
         id: "sj_s1",
-        date: "02.NOV",
-        bookingRefsText: "SE1410260549",
-        shipmentsText: "S02319432",
-        bookingsText: "WAL076N05527HN0 WAL076N05528HN0 WAL076N05529HN0",
+        date: "03.NOV",
+        bookingRefsText: "SE1809260349 SE0310260183 SE0310260145",
+        shipmentsText: "S02320180 S02319546 S02319544",
+        bookingsText: "BY388673 BY414666 BY414778",
         contsText: "",
-        truckCode: "8T",
-        volumesText: "5.571 4.414 3.664",
-        inTimesText: "08:00",
-        outTimesText: "11:05",
+        truckCode: "10T",
+        volumesText: "1.81 16.01 14.1",
+        inTimesText: "07:52",
+        outTimesText: "10:00",
         nextDay: false,
         deductLunch: true,
         factoryKey: "sunjune",
         extraTrucks: 0,
         cancelCount: 0,
-        waitHours: 1,
+        waitHours: 0,
         overnightCount: 0,
         shellFrom: "",
         shellTo: "",
         shellDays: 0,
         tendaOn: true,
         tollFee: 0,
-        note: "Tenda + 1 Giờ chờ",
+        note: "Tenda",
         misaInvoice: "",
         misaAmount: "",
         lineMisa: [],
@@ -1532,6 +1577,10 @@
       saveState();
       const tEl = $("#sjPreview .sj-sheet-title");
       if (tEl) tEl.textContent = sjState.title || "BẢNG TỔNG HỢP PHÁT SINH";
+    });
+    on("#sjSheetName", "input", (e) => {
+      sjState.sheetName = e.target.value;
+      saveState();
     });
     on("#sjVatOn", "change", (e) => {
       sjState.vatOn = e.target.checked;
@@ -1753,7 +1802,7 @@
       if (!list.length) return toast("Chưa có dữ liệu bảng kê để xuất Excel.");
       try {
         const buf = await buildSunjuneXlsxBuffer(list);
-        const file = `bang-ke-sunjune.xlsx`;
+        const file = `${safeFileName(sjState.title)}.xlsx`;
         downloadBuffer(file, buf);
         toast(`Đã xuất ${file}`);
       } catch (err) {
@@ -1782,6 +1831,9 @@
       calcShellRange,
       calcTripDetails,
       buildAutoNote,
+      autoSheetName,
+      safeSheetName,
+      safeFileName,
       VN_TARIFF,
     },
   };
