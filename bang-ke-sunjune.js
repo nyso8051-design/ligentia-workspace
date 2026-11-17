@@ -99,25 +99,78 @@
   let searchQuery = "";
   let showTariffDrawer = false;
 
+  const MONTHS_EN = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
+  function parseDateInfo(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+
+    let day = 0;
+    let month = 0;
+    let year = null;
+
+    // 1. ISO YYYY-MM-DD hoặc YYYY/MM/DD
+    const iso = /^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/.exec(s);
+    if (iso) {
+      year = +iso[1];
+      month = +iso[2];
+      day = +iso[3];
+    } else {
+      // 2. DD/MM, DD.MM, DD-MM (có hoặc không có năm)
+      const dm = /^(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{2,4}))?$/.exec(s);
+      if (dm) {
+        day = +dm[1];
+        month = +dm[2];
+        if (dm[3]) year = dm[3].length === 2 ? 2000 + +dm[3] : +dm[3];
+      } else {
+        // 3. DD.MMM / D.MMM / DD MMM / DDMmm (VD: 17.NOV, 3.nov, 15 NOV, 03.NOV.26)
+        const dMon = /^(\d{1,2})[\s.\-\/]*([A-Za-z]{3})(?:[\s.\-\/]*(\d{2,4}))?$/.exec(s);
+        if (dMon) {
+          day = +dMon[1];
+          const moIdx = MONTHS_EN.indexOf(dMon[2].toUpperCase());
+          if (moIdx >= 0) month = moIdx + 1;
+          if (dMon[3]) year = dMon[3].length === 2 ? 2000 + +dMon[3] : +dMon[3];
+        }
+      }
+    }
+
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const label = `${String(day).padStart(2, "0")}.${MONTHS_EN[month - 1]}`;
+    return { day, month, year, label };
+  }
+
   function formatShortDate(iso) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
-    if (!m) return "";
-    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-    return `${m[3]}.${months[+m[2] - 1] || m[2]}`;
+    const info = parseDateInfo(iso);
+    return info ? info.label : "";
   }
 
   function normalizeDateLabel(str) {
     const raw = String(str || "").trim();
     if (!raw) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return formatShortDate(raw);
-    const dm = /^(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-]\d{2,4})?$/.exec(raw);
-    if (dm) {
-      const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-      const d = String(+dm[1]).padStart(2, "0");
-      const mo = months[+dm[2] - 1];
-      if (mo) return `${d}.${mo}`;
-    }
-    return raw.toUpperCase();
+    const info = parseDateInfo(raw);
+    return info ? info.label : raw.toUpperCase();
+  }
+
+  function buildDateSortKeyMap(datesRaw) {
+    const parsed = datesRaw.map((d) => parseDateInfo(d));
+    const monthsYearless = parsed.filter((p) => p && p.year == null).map((p) => p.month);
+    const spansYearEnd = monthsYearless.some((m) => m >= 10) && monthsYearless.some((m) => m <= 3);
+    const baseYear = new Date().getFullYear();
+
+    return parsed.map((p) => {
+      if (!p) return Number.MAX_SAFE_INTEGER;
+      const effYear = p.year != null ? p.year : spansYearEnd && p.month <= 3 ? baseYear + 1 : baseYear;
+      return effYear * 10000 + p.month * 100 + p.day;
+    });
+  }
+
+  function sortTripsChronologically(tripsList) {
+    const list = Array.isArray(tripsList) ? tripsList : [];
+    const keys = buildDateSortKeyMap(list.map((t) => t.date));
+    return list
+      .map((trip, origIdx) => ({ trip, origIdx, sortKey: keys[origIdx] }))
+      .sort((a, b) => a.sortKey - b.sortKey || a.origIdx - b.origIdx)
+      .map((x) => x.trip);
   }
 
   function normalizeTimeStr(str) {
@@ -270,26 +323,35 @@
       });
     }
 
-    // Tìm Volume lớn nhất trong cụm combine để in đậm
+    // Tìm 1 dòng duy nhất có Volume lớn nhất trong cụm combine để in đậm & đặt toàn bộ cột tiền
+    let maxVolIdx = 0;
     let maxVol = -Infinity;
     const numericVols = rows.map((r) => {
-      const n = parseFloat(String(r.volume || "").replace(/,/g, ""));
-      return !isNaN(n) && /^[\d.,]+$/.test(String(r.volume || "").trim()) ? n : null;
+      const s = String(r.volume || "").trim();
+      if (!/^\d+(?:[.,]\d+)?$/.test(s)) return null;
+      const n = parseFloat(s.replace(",", "."));
+      return isFinite(n) ? n : null;
     });
-    const validNums = numericVols.filter((v) => v !== null);
-    if (rowCount > 1 && validNums.length >= 2) {
-      maxVol = Math.max(...validNums);
-    }
+    numericVols.forEach((v, idx) => {
+      if (v !== null && v > maxVol) {
+        maxVol = v;
+        maxVolIdx = idx;
+      }
+    });
+    const hasMaxVol = rowCount > 1 && maxVol > -Infinity;
     rows.forEach((r, idx) => {
-      r.isMaxVol = maxVol > -Infinity && numericVols[idx] === maxVol;
+      r.isMaxVol = hasMaxVol && idx === maxVolIdx;
     });
 
+    const isCombine = !splitCosts && rowCount > 1;
     return {
       rows,
       rowCount,
       mergeCont: !isSplitByCont && rowCount > 1,
       mergeTime: !isSplitByTime && rowCount > 1,
-      mergeCost: !splitCosts && rowCount > 1,
+      mergeCost: false, // 6 cột tiền (Cước xe..Tổng trả) KHÔNG bao giờ merge
+      mergeMeta: isCombine, // NOTE, Hoá đơn Misa, Tiền Misa merge khi combine
+      costRowIdx: splitCosts ? -1 : maxVolIdx,
       splitCosts,
     };
   }
@@ -529,7 +591,7 @@
           defaultFactory: raw.defaultFactory || "sunjune",
           vatOn: typeof raw.vatOn === "boolean" ? raw.vatOn : true,
           vatRate: raw.vatRate !== undefined && !isNaN(Number(raw.vatRate)) ? Number(raw.vatRate) : 8,
-          trips: Array.isArray(raw.trips) ? raw.trips : [],
+          trips: sortTripsChronologically(Array.isArray(raw.trips) ? raw.trips : []),
         };
         return;
       }
@@ -578,9 +640,10 @@
   }
 
   function autoSheetName(tripsList) {
+    const sorted = sortTripsChronologically(tripsList);
     const dates = [];
     const seen = new Set();
-    (tripsList || []).forEach((t) => {
+    sorted.forEach((t) => {
       const d = normalizeDateLabel(t.date);
       if (d && !seen.has(d)) {
         seen.add(d);
@@ -607,20 +670,21 @@
       .trim() || "BẢNG TỔNG HỢP PHÁT SINH";
   }
 
-  /* ---------- HTML Preview & Print Sheet (Đúng 18 cột & Dòng Date ngang) ---------- */
+  /* ---------- HTML Preview & Print Sheet (Đúng 18 cột & Dòng Date ngang theo thứ tự ngày) ---------- */
   function groupTripsByDate(detailed) {
+    const keys = buildDateSortKeyMap(detailed.map((x) => x.trip.date));
     const groups = [];
     const map = new Map();
-    detailed.forEach((item) => {
+    detailed.forEach((item, idx) => {
       const dKey = normalizeDateLabel(item.trip.date) || "CHƯA GHI NGÀY";
       if (!map.has(dKey)) {
-        const g = { dateLabel: dKey, items: [] };
+        const g = { dateLabel: dKey, sortKey: keys[idx], order: idx, items: [] };
         map.set(dKey, g);
         groups.push(g);
       }
       map.get(dKey).items.push(item);
     });
-    return groups;
+    return groups.sort((a, b) => a.sortKey - b.sortKey || a.order - b.order);
   }
 
   function buildStatementHtml(tripsList, forPrint = false) {
@@ -645,8 +709,9 @@
               return rows
                 .map((r, idx) => {
                   const lc = expanded.splitCosts ? lineCalcs[idx] : lineCalcs[0];
-                  const showCost = expanded.splitCosts || idx === 0;
-                  const costSpan = expanded.splitCosts ? "" : span;
+                  const showFeeCells = expanded.splitCosts || idx === expanded.costRowIdx;
+                  const showMetaCells = expanded.splitCosts || idx === 0;
+                  const metaSpan = expanded.splitCosts ? "" : span;
                   const contSpan = expanded.mergeCont ? span : "";
                   const timeSpan = expanded.mergeTime ? span : "";
                   const truckSpan = !expanded.splitCosts && n > 1 ? span : "";
@@ -670,28 +735,35 @@
                     cells.push(`<td${timeSpan} class="c">${esc(rowTiming.loadingTime || "")}</td>`);
                   }
 
-                  if (showCost) {
+                  // 6 cột tiền (Cước xe..Tổng trả): KHÔNG BAO GIỜ merge; combine thì đặt ở dòng Volume lớn nhất
+                  if (showFeeCells) {
+                    cells.push(`<td class="r">${lc.truckFee ? fmt(lc.truckFee) : ""}</td>`);
+                    cells.push(`<td class="r">${lc.waitAndOvernight ? fmt(lc.waitAndOvernight) : ""}</td>`);
+                    cells.push(`<td class="r">${lc.shellFee ? fmt(lc.shellFee) : ""}</td>`);
+                    cells.push(`<td class="r">${lc.tendaFee ? fmt(lc.tendaFee) : ""}</td>`);
+                    cells.push(`<td class="r">${lc.tollFee ? fmt(lc.tollFee) : ""}</td>`);
+                    cells.push(`<td class="r"><b>${fmt(lc.totalFee)}</b></td>`);
+                  } else {
+                    for (let k = 0; k < 6; k++) cells.push(`<td class="r"></td>`);
+                  }
+
+                  // NOTE, Hoá đơn Misa, Tiền Misa: vẫn merge theo cụm combine (hoặc tách từng dòng nếu splitCosts)
+                  if (showMetaCells) {
                     const misaInv = expanded.splitCosts ? (trip.lineMisa?.[idx]?.inv ?? (idx === 0 ? trip.misaInvoice : "")) : (trip.misaInvoice || "");
                     const misaAmt = expanded.splitCosts ? (trip.lineMisa?.[idx]?.amt ?? (idx === 0 ? trip.misaAmount : "")) : (trip.misaAmount || "");
                     const lineIdxAttr = expanded.splitCosts ? idx : 0;
 
-                    cells.push(`<td${costSpan} class="r">${lc.truckFee ? fmt(lc.truckFee) : ""}</td>`);
-                    cells.push(`<td${costSpan} class="r">${lc.waitAndOvernight ? fmt(lc.waitAndOvernight) : ""}</td>`);
-                    cells.push(`<td${costSpan} class="r">${lc.shellFee ? fmt(lc.shellFee) : ""}</td>`);
-                    cells.push(`<td${costSpan} class="r">${lc.tendaFee ? fmt(lc.tendaFee) : ""}</td>`);
-                    cells.push(`<td${costSpan} class="r">${lc.tollFee ? fmt(lc.tollFee) : ""}</td>`);
-                    cells.push(`<td${costSpan} class="r"><b>${fmt(lc.totalFee)}</b></td>`);
-                    cells.push(`<td${costSpan} class="sj-note-cell">${esc(lc.note)}</td>`);
+                    cells.push(`<td${metaSpan} class="sj-note-cell">${esc(lc.note)}</td>`);
 
                     if (forPrint) {
-                      cells.push(`<td${costSpan} class="c">${esc(misaInv)}</td>`);
-                      cells.push(`<td${costSpan} class="r">${misaAmt ? fmt(Number(String(misaAmt).replace(/,/g, "")) || 0) : ""}</td>`);
+                      cells.push(`<td${metaSpan} class="c">${esc(misaInv)}</td>`);
+                      cells.push(`<td${metaSpan} class="r">${misaAmt ? fmt(Number(String(misaAmt).replace(/,/g, "")) || 0) : ""}</td>`);
                     } else {
                       cells.push(
-                        `<td${costSpan} class="c hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="inv">${esc(misaInv)}</td>`
+                        `<td${metaSpan} class="c hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="inv">${esc(misaInv)}</td>`
                       );
                       cells.push(
-                        `<td${costSpan} class="r hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="amt">${esc(misaAmt)}</td>`
+                        `<td${metaSpan} class="r hd-edit" contenteditable="true" data-misa-trip="${esc(trip.id)}" data-misa-idx="${lineIdxAttr}" data-misa-field="amt">${esc(misaAmt)}</td>`
                       );
                     }
                   }
@@ -964,14 +1036,14 @@
             setC(9, showTime ? rowTiming?.loadingTime || "" : "");
           }
 
-          // Chi phí phát sinh với công thức Excel thật
-          const showCost = expanded.splitCosts || idx === 0;
+          // 6 cột tiền (cột 10..15): KHÔNG BAO GIỜ merge; combine thì chỉ điền ở dòng Volume lớn nhất
+          const showFeeCells = expanded.splitCosts || idx === expanded.costRowIdx;
           const lc = expanded.splitCosts ? lineCalcs[idx] : lineCalcs[0];
-          if (showCost) {
+          if (showFeeCells) {
             if (lc.truckCountTotal > 0) {
               setC(10, { formula: `ROUND(${baseVnd}*${FUEL_FACTOR}*${lc.truckCountTotal},3)`, result: lc.truckFee }, "right", false, xlsxFmt(lc.truckFee));
             } else {
-              setC(10, "");
+              setC(10, null);
             }
 
             const waitParts = [];
@@ -980,20 +1052,26 @@
             if (waitParts.length) {
               setC(11, { formula: `ROUND(${waitParts.join("+")},3)`, result: lc.waitAndOvernight }, "right", false, xlsxFmt(lc.waitAndOvernight));
             } else {
-              setC(11, "");
+              setC(11, null);
             }
 
             if (lc.shellDays > 0) {
               setC(12, { formula: `${lc.shellDays}*${SHELL_FEE_PER_DAY}`, result: lc.shellFee }, "right", false, xlsxFmt(lc.shellFee));
             } else {
-              setC(12, "");
+              setC(12, null);
             }
 
-            setC(13, lc.tendaFee ? lc.tendaFee : "", "right", false, lc.tendaFee ? "#,##0" : null);
-            setC(14, lc.tollFee ? lc.tollFee : "", "right", false, lc.tollFee ? xlsxFmt(lc.tollFee) : null);
+            setC(13, lc.tendaFee ? lc.tendaFee : null, "right", false, lc.tendaFee ? "#,##0" : null);
+            setC(14, lc.tollFee ? lc.tollFee : null, "right", false, lc.tollFee ? xlsxFmt(lc.tollFee) : null);
             setC(15, { formula: `ROUND(SUM(J${rn}:N${rn}),3)`, result: lc.totalFee }, "right", true, xlsxFmt(lc.totalFee));
             totalFormulaRefs.push(`O${rn}`);
+          } else {
+            for (let col = 10; col <= 15; col++) setC(col, null);
+          }
 
+          // NOTE & Misa (cột 16..18): giữ merge khi combine
+          const showMetaCells = expanded.splitCosts || idx === 0;
+          if (showMetaCells) {
             setC(16, lc.note || "", "center");
 
             const misaInv = expanded.splitCosts ? (trip.lineMisa?.[idx]?.inv ?? (idx === 0 ? trip.misaInvoice : "")) : (trip.misaInvoice || "");
@@ -1002,7 +1080,7 @@
             setC(17, misaInv || "");
             setC(18, !isNaN(misaNum) && misaNum > 0 ? misaNum : (misaAmtRaw || ""), "right", false, !isNaN(misaNum) && misaNum > 0 ? xlsxFmt(misaNum) : null);
           } else {
-            for (let col = 10; col <= 18; col++) setC(col, "");
+            for (let col = 16; col <= 18; col++) setC(col, null);
           }
         });
 
@@ -1015,8 +1093,8 @@
             ws.mergeCells(startRowNum, 8, endRowNum, 8);
             ws.mergeCells(startRowNum, 9, endRowNum, 9);
           }
-          if (expanded.mergeCost) {
-            for (let col = 10; col <= 18; col++) {
+          if (expanded.mergeMeta) {
+            for (let col = 16; col <= 18; col++) {
               ws.mergeCells(startRowNum, col, endRowNum, col);
             }
           }
@@ -1507,15 +1585,22 @@
     }
     const copy = JSON.parse(JSON.stringify(draft));
     copy.date = normalizeDateLabel(copy.date);
+    const hadDateAlready = sjState.trips.some((t) => normalizeDateLabel(t.date) === copy.date && t.id !== editingTripId);
 
     if (editingTripId) {
       const idx = sjState.trips.findIndex((t) => t.id === editingTripId);
       if (idx >= 0) sjState.trips[idx] = copy;
       else sjState.trips.push(copy);
-      toast("Đã cập nhật chuyến phát sinh.");
+      sjState.trips = sortTripsChronologically(sjState.trips);
+      toast(`Đã cập nhật chuyến (${copy.date || "chưa ghi ngày"}).`);
     } else {
       sjState.trips.push(copy);
-      toast("Đã thêm chuyến vào bảng kê.");
+      sjState.trips = sortTripsChronologically(sjState.trips);
+      toast(
+        hadDateAlready && copy.date
+          ? `Đã thêm vào đúng nhóm ngày ${copy.date} (tự động sắp xếp thứ tự).`
+          : "Đã thêm chuyến vào bảng kê (đã sắp xếp đúng thứ tự ngày)."
+      );
     }
 
     const keepDate = copy.date;
@@ -1619,6 +1704,7 @@
       },
     ];
     sjState.trips.push(...samples);
+    sjState.trips = sortTripsChronologically(sjState.trips);
     saveState();
     renderSunjune();
     toast("Đã nạp 3 chuyến ví dụ mẫu (có combine & dòng Ngày nằm ngang).");
@@ -1897,6 +1983,11 @@
       calcStatementSummary,
       estimateNoteLines,
       buildSunjuneXlsxBuffer,
+      buildStatementHtml,
+      parseDateInfo,
+      normalizeDateLabel,
+      sortTripsChronologically,
+      groupTripsByDate,
       buildAutoNote,
       autoSheetName,
       safeSheetName,
